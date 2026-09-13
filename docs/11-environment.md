@@ -122,3 +122,37 @@ the old channel, so "heat" was, in effect, cold all along. In the browser, heat 
 on the hot cells and cool 53 / 66 Hz on the cold and cooling cells; both leave the body nearly
 still (neck and proboscis within a few Hz of rest), which is what the wiring says. They are
 distinct in Inspect and were left honest rather than amplified.
+
+## Light and looming as things that happen in the scene
+
+**Light.** The Light switch still drives the 11,426 visual neurons (5 → 174 Hz); the scene now
+brightens with it — hemisphere, key and rim lights up 45/55/30 %, the sky 25 %, fog lifted —
+so the stimulus and what the viewer sees agree. Rendering only: the terrarium still sends
+nothing to the brain, and the light level is the switch, not the picture.
+
+**Looming.** The Looming switch is now an event: one press sends a matte dark sphere
+(radius 0.12) from 1.9 units ahead-and-above the fly to 0.32 over 1.1 s, holds it there for
+0.25 s, and pulls it back. A sphere rather than a disc because it reads the same from every
+camera angle and casts a real shadow onto the fly as it arrives; the 19° view is narrow, so it
+is in frame for the last half second. The looming stimulus follows its angular size,
+`(r/d ÷ r/d_min)^1.5`, so LC4 and LPLC2 see the slow-then-sharp expansion of an object on a
+collision course, and it releases with an 80 ms time constant after the pass. Stepped in brain time alongside the poke. A squared
+ramp was tried first and held the peak for only ~0.1 s; the escape DNs reached 84/38 Hz, well
+short of the 218/169 Hz a sustained loom gives them. The hold fixes that (measured, not tuned
+by eye):
+
+```
+  ms      d    level   LC4   escwing L/R   wing yaw L
+     0   1.90  0.07      1       0/0        0.71
+   600   1.04  0.17     12      22/3        0.72
+   900   0.61  0.38     40      72/23       0.56
+  1000   0.46  0.58     70     113/56       0.55
+  1100   0.32  1.00    131     201/129      0.22
+  1150   0.32  1.00    146     217/156      0.16
+  1400   0.32  0.53    105     171/121      0.16
+  1500   0.32  0.15     18      30/13       0.41
+  1800   1.90  0        1       0/0         0.70
+```
+
+The wings deploy and fold back exactly, through the real circuit: sphere → LC4/LPLC2 → DNp02/04/11
+→ the supplied wing posture. This is the trigger flight builds on (see [flight](12-flight.md)).

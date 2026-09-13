@@ -699,6 +699,36 @@ function stepPoke(dt: number) {
   if (stimPulse.touch !== poke.level) { stimPulse.touch = poke.level; applyStim('touch'); }
 }
 
+// ------------------------------------------------------------- looming event
+// A dark sphere of radius LOOM.r approaches the fly from distance d0 to dmin at constant speed
+// over LOOM.approach seconds, hangs at closest approach for LOOM.hold, then passes. The looming
+// stimulus (LC4 + LPLC2, the fly's own looming detectors) follows its angular size:
+// level = (r/d / r/dmin)^1.5, rising slowly and then sharply the way an object on a collision
+// course expands (a squared ramp peaked for only ~0.1 s and the escape DNs never reached the
+// rate a sustained loom gives them; measured, not tuned by eye). After the pass the level
+// releases exponentially. Stepped in brain time from stepSimulation, like the poke, so the
+// neural ramp and the object share a clock; the sphere is drawn from this state in main.
+const LOOM = { r:0.12, d0:1.9, dmin:0.32, approach:1.1, hold:0.25, release:0.08, fade:0.35, exp:1.5 };
+const loom = { active:false, t:0, d:LOOM.d0, level:0, count:0 };
+function startLoom() {
+  loom.active = true; loom.t = 0; loom.d = LOOM.d0; loom.count++;
+}
+function stepLoom(dt: number) {
+  if (!loom.active) return;
+  loom.t += dt;
+  const passT = LOOM.approach + LOOM.hold;
+  if (loom.t <= LOOM.approach) {
+    loom.d = LOOM.d0 + (LOOM.dmin - LOOM.d0) * (loom.t / LOOM.approach);
+    loom.level = Math.min(1, Math.pow((LOOM.r / loom.d) / (LOOM.r / LOOM.dmin), LOOM.exp));
+  } else if (loom.t <= passT) {
+    loom.d = LOOM.dmin; loom.level = 1;
+  } else {
+    loom.level *= Math.exp(-dt / LOOM.release);
+    if (loom.t > passT + LOOM.fade) { loom.active = false; loom.level = 0; loom.d = LOOM.d0; }
+  }
+  if (stimPulse.looming !== loom.level) { stimPulse.looming = loom.level; applyStim('looming'); }
+}
+
 function stepSimulation() {
   mujoco.mj_step(model, data);
   sim.steps++;
@@ -707,6 +737,7 @@ function stepSimulation() {
   if (sim.steps % 10 === 0) {
     brain.step(1);
     stepPoke(0.001);
+    stepLoom(0.001);
     applyBrainToActuators(brain, data);
     stepShuffle(brain, data, 0.001);
   }
@@ -764,7 +795,8 @@ function stepSimulation() {
       camera.position.copy(homePosition); controls.target.copy(homeTarget); controls.update();
     };
 
-    scene.add(new THREE.HemisphereLight(0x9fc4ff, 0x1a2028, 1.15));
+    const hemi = new THREE.HemisphereLight(0x9fc4ff, 0x1a2028, 1.15);
+    scene.add(hemi);
     const key = new THREE.DirectionalLight(0xffffff, 2.1);
     // The fly faces +X; +Y is its left. Preserve the sun's radius and elevation.
     key.position.set(0, Math.hypot(0.5, 0.7), 0.9); key.castShadow = true;
@@ -869,6 +901,10 @@ function stepSimulation() {
         console.warn(`stimulus "${k}" not in brain.js — stale cache?`);
         continue;
       }
+      if (btn.dataset.event === 'loom') {      // an event, not a switch: one approach per press
+        btn.onclick = () => { startLoom(); syncStimUI(); };
+        continue;
+      }
       btn.onclick = () => {
         stimSwitch[k] = (stimSwitch[k] || 0) > 0 ? 0 : 1;
         applyStim(k);
@@ -882,7 +918,7 @@ function stepSimulation() {
     function syncStimUI() {
       for (const el of stimElements) {
         const k = el.dataset.stim || '';
-        const on = el instanceof HTMLButtonElement ? (stimSwitch[k] || 0) > 0 : brain.stim[k] > 0;
+        const on = el instanceof HTMLButtonElement && !el.dataset.event ? (stimSwitch[k] || 0) > 0 : brain.stim[k] > 0;
         if (el.classList.contains('on') !== on) el.classList.toggle('on', on);
         if (el instanceof HTMLButtonElement) el.setAttribute('aria-pressed', String(on));
       }
@@ -890,6 +926,45 @@ function stepSimulation() {
       document.body.classList.toggle('is-sugar-off', brain.sugar <= 0);
     }
     syncStimUI();
+
+    // ---- light: the visual stimulus and what the viewer sees agree
+    // The scene brightens with the `light` level (11,426 visual neurons driven), from the
+    // artwork's resting look at 0 to a sunlit terrarium at 1. Rendering only; the stimulus
+    // itself is the switch, and the terrarium still sends nothing to the brain.
+    const REST_LIGHT = { hemi: hemi.intensity, key: key.intensity, rim: rim.intensity, bg: 1.0 };
+    const lighting = { cur: 0 };
+    function stepLighting(dt: number) {
+      const target = brain.stim.light;
+      lighting.cur += (target - lighting.cur) * (1 - Math.exp(-dt / 0.35));
+      const u = lighting.cur;
+      hemi.intensity = REST_LIGHT.hemi * (1 + 0.45 * u);
+      key.intensity  = REST_LIGHT.key  * (1 + 0.55 * u);
+      rim.intensity  = REST_LIGHT.rim  * (1 + 0.3 * u);
+      scene.backgroundIntensity = REST_LIGHT.bg * (1 + 0.25 * u);
+      if (scene.fog instanceof THREE.Fog) scene.fog.color.setRGB(0.80 + 0.12 * u, 0.92 + 0.06 * u, 0.94 + 0.04 * u);
+    }
+
+    // ---- looming object: the visible cause of the escape response
+    // A matte dark sphere rather than a disc: it reads the same from every camera angle and
+    // casts a real shadow onto the fly as it arrives. It approaches from ahead and above, in
+    // the camera's frame for the last half second (the 19 degree view is narrow).
+    const loomBall = new THREE.Mesh(
+      new THREE.SphereGeometry(LOOM.r, 28, 18),
+      new THREE.MeshStandardMaterial({ color: 0x1c1622, roughness: 0.9, metalness: 0, transparent: true, opacity: 1 }));
+    loomBall.visible = false; loomBall.castShadow = true;
+    scene.add(loomBall);
+    const LOOM_DIR = new THREE.Vector3(0.85, -0.10, 0.50).normalize();
+    const thoraxBody = mujoco.mj_name2id(model, 1 /* mjOBJ_BODY */, 'thorax');
+    const thoraxPos = new THREE.Vector3();
+    function stepLoomDisc() {
+      if (!loom.active) { loomBall.visible = false; return; }
+      thoraxPos.set(data.xpos[thoraxBody * 3], data.xpos[thoraxBody * 3 + 1], data.xpos[thoraxBody * 3 + 2]);
+      const passT = LOOM.approach + LOOM.hold;
+      const d = loom.t <= passT ? loom.d : LOOM.dmin + (loom.t - passT) * 4.0;   // retreats the way it came
+      loomBall.position.copy(thoraxPos).addScaledVector(LOOM_DIR, d);
+      loomBall.material.opacity = loom.t <= passT ? 1 : Math.max(0, 1 - (loom.t - passT) / LOOM.fade);
+      loomBall.visible = true;
+    }
 
     // ---- poke: tap the fly to touch it
     // A tap (short press, little movement) is raycast against the fly's visible geoms — the same
@@ -984,7 +1059,7 @@ function stepSimulation() {
     // ---- loop
     const timestep = 1e-4;                          // flybody's opt.timestep
     let last = performance.now(), acc = 0, fps = 0, fpsT = last, frames = 0, sps = 0, spsN = 0, spsT = last;
-    let nextFrameAt = last, mapAt = 0, hudAt = 0;
+    let nextFrameAt = last, mapAt = 0, hudAt = 0, loomShown = false;
     // Browser suspension must never become a backlog of simulation work on return.
     document.addEventListener('visibilitychange', () => {
       last = nextFrameAt = performance.now();
@@ -1056,6 +1131,9 @@ function stepSimulation() {
 
       if (!sim.paused) stepBall(wall);
       stepRipples(wall);
+      stepLighting(wall);
+      stepLoomDisc();
+      if (loom.active !== loomShown) { loomShown = loom.active; syncStimUI(); }
       controls.update();
       renderer.render(scene, camera);
       if (now >= mapAt) {
@@ -1077,6 +1155,7 @@ function stepSimulation() {
     flyWindow.fly = { mujoco, model, data, brain, sim, scene, camera, renderer, controls, geomNodes, quality,
                    applyBrain: () => applyBrainToActuators(brain, data), driveMap, shuffle, shuffleLegs,
                    stepSimulation, stimSwitch, stimPulse, applyStim, syncStimUI, poke, pokeBody, pokeAtScreen,
+                   loom, startLoom, lighting, lights: { hemi, key, rim },
                    sync: () => syncGeoms(model, data),
                    stepBall, get ball() { return ball; }, get world() { return world; },
                    dbg: () => ({ paused: sim.paused, acc, steps: sim.steps, time: data.time,

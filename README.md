@@ -28,8 +28,9 @@ The local server builds once at startup; restart it after editing source files.
 
 Name the fly to begin. Drag to orbit and scroll to zoom. Tap the fly to touch it: a brief
 mechanosensory pulse, held longer on the head and antennae. Sugar, pause and recenter controls
-sit below the fly, with an environment strip that switches the other sensory inputs (touch,
-heat, light, looming, odour, bitter, damp) on and off; each drives a real FlyWire population.
+sit below the fly, with an environment strip for the other senses: touch, heat, cool, odour,
+bitter and damp are switches, Light also brightens the terrarium, and Loom sends a dark disc
+at the fly. Each drives a real FlyWire population.
 About contains the premise, technical summary, credits and further reading; Inspect shows
 neural activity, sensory input rates and simulation statistics.
 
