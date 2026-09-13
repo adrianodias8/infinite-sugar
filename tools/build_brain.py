@@ -79,6 +79,18 @@ for r in ("mn_neck", "mn_antenna", "dn_steer", "dn_escwing"):
     for sd in ("left", "right"):
         g = [i for i in groups[r] if side[i] == sd]
         if g: groups[f"{r}_{sd[0]}"] = g
+# Split the temperature senses by FlyWire sub_class. Real flies have separate hot and cold
+# cells on the arista/sacculus; v783 labels them: thermosensory 'heating' (TRN_VP2) vs 'cold'
+# (TRN_VP3a/b), and the hygrosensory 'cooling' / 'evaporative_cooling' cells (HRN_VP1l/VP1d).
+# `thermo` and `hygro` stay as the unions, so nothing that used them changes.
+SUB_SPLIT = {
+    "thermo_hot":  ("thermo", ("heating",)),
+    "thermo_cold": ("thermo", ("cold",)),
+    "hygro_cool":  ("hygro",  ("cooling", "evaporative_cooling")),
+}
+for r, (parent, subs) in SUB_SPLIT.items():
+    g = [i for i in groups[parent] if sub[i] in subs]
+    if g: groups[r] = g
 print("\nroles:")
 for r in sorted(groups): print(f"  {r:<16} {len(groups[r]):>4}")
 

@@ -14,8 +14,10 @@ experience occurs.
 
 ## Input and output
 
-Sugar directly stimulates sweet-sensing gustatory neurons. The terrarium supplies no visual,
-olfactory or contact feedback to the brain.
+Sugar directly stimulates sweet-sensing gustatory neurons. The other sensory populations are
+switched from the environment strip, and a tap on the fly is a brief mechanosensory pulse. The
+terrarium itself supplies no visual, olfactory or contact feedback to the brain. See
+[environment](11-environment.md).
 
 Identified feeding motor populations drive proboscis actuator targets through smoothed firing
 rates. Head and antennal responses also follow neural activity. Wing movements and foot

@@ -9,7 +9,7 @@ G={k:np.array(v,np.int64) for k,v in roles.items()}
 DECAY=np.float32(np.exp(-1/20)); TH=np.float32(1.0); RF=2; ID=4
 WS,BASE,DRIVE=0.0050,0.06,0.20
 
-def run(ms, stim, seed=1, warm=400):
+def run(ms, stim, seed=1, warm=400, gain=1.0):
     rng=np.random.default_rng(seed); w=(weight*WS).astype(np.float32)
     v=np.zeros(N,np.float32); refr=np.zeros(N,np.int8)
     baseline=rng.uniform(0,BASE,N).astype(np.float32)
@@ -19,7 +19,7 @@ def run(ms, stim, seed=1, warm=400):
     for t in range(-warm,ms):
         s=(t+warm)%(ID+1); q=inhq[s]; v+=q; q.fill(0); np.maximum(v,-2,out=v)
         a=refr==0; v[a]=v[a]*DECAY+baseline[a]; v[~a]*=DECAY; refr[~a]-=1
-        if tgt is not None and t>=0: v[tgt]+=DRIVE
+        if tgt is not None and t>=0: v[tgt]+=DRIVE*gain
         f=a&(v>=TH); idxf=np.flatnonzero(f); v[f]=0; refr[f]=RF
         if t>=0: cnt[idxf]+=1
         if len(idxf):
@@ -33,14 +33,16 @@ def run(ms, stim, seed=1, warm=400):
 
 OUTS=["mn_proboscis","mn_neck","mn_antenna","dn_gf","dn_escwing","dn_steer","dn_walk","dn_groom","pam"]
 INS=[("(none)",[]),("sweet",["grn_sweet","grn_sweet_leg"]),("bitter",["grn_bitter"]),
-     ("odour",["orn"]),("touch",["mechano"]),("heat",["thermo"]),
+     ("odour",["orn"]),("touch",["mechano"]),("thermo",["thermo"]),
+     ("heat 1x",["thermo_hot"]),("heat 2.5x",["thermo_hot"],2.5),   # hot cells are tonically inhibited; see brain.ts stimGain
+     ("cold",["thermo_cold"]),("cool",["thermo_cold","hygro_cool"]),
      ("humid",["hygro"]),("light",["visual"]),("looming",["lc4","lplc2"])]
 MS=1200
 base=None
 print(f"  {'stimulus':<10}{'pop':>6} | " + "".join(f"{o.replace(chr(109)+chr(110)+chr(95),chr(0)).replace(chr(0),''):>12}" for o in OUTS))
 print("  " + "-"*(18+12*len(OUTS)))
-for name,stim in INS:
-    r=run(MS,stim)
+for name,stim,*gain in INS:
+    r=run(MS,stim,gain=gain[0] if gain else 1.0)
     pop=r.mean()
     if base is None: base=r
     cells=[]

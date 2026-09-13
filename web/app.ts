@@ -1037,7 +1037,8 @@ function stepSimulation() {
         $('s_bitter').textContent = brain.rate.grn_bitter.toFixed(0) + ' Hz';
         $('s_orn').textContent  = brain.rate.orn.toFixed(0) + ' Hz';
         $('s_mech').textContent = brain.rate.mechano.toFixed(0) + ' Hz';
-        $('s_thermo').textContent = brain.rate.thermo.toFixed(0) + ' Hz';
+        $('s_hot').textContent  = brain.rate.thermo_hot.toFixed(0) + ' Hz';
+        $('s_cold').textContent = brain.rate.thermo_cold.toFixed(0) + ' Hz';
         $('s_hygro').textContent = brain.rate.hygro.toFixed(0) + ' Hz';
         $('s_vis').textContent  = brain.rate.visual.toFixed(0) + ' Hz';
         $('s_loom').textContent = ((brain.rate.lc4 + brain.rate.lplc2) / 2).toFixed(0) + ' Hz';

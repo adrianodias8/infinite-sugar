@@ -51,6 +51,7 @@ export class Brain {
   declare groups: Record<string, Int32Array>;
   declare roleNames: string[];
   declare roleOf: Int8Array;
+  declare roleOf2: Int8Array;
   declare rate: Record<string, number>;
   declare _cnt: Int32Array;
   declare popRate: number;
@@ -58,6 +59,7 @@ export class Brain {
   declare STIM: Record<string, string[]>;
   declare stim: Record<string, number>;
   declare stimDrive: number;
+  declare stimGain: Record<string, number>;
   declare _active: ActiveStimulus[];
   declare sugar: number;
   declare feedSpikes: number;
@@ -93,8 +95,18 @@ export class Brain {
     this.groups = {};
     for (const [k, arr] of Object.entries(meta.roles)) this.groups[k] = Int32Array.from(arr);
     this.roleNames = Object.keys(this.groups);
+    // A neuron can belong to a union pool and one sub-pool (mn_neck + mn_neck_l, thermo +
+    // thermo_hot). Rates are counted per pool, so both memberships are kept; a third would
+    // silently drop counts, hence the hard error. Readout telemetry only — no effect on dynamics.
     this.roleOf = new Int8Array(N).fill(-1);
-    this.roleNames.forEach((k, ri) => { for (const i of this.groups[k]) this.roleOf[i] = ri; });
+    this.roleOf2 = new Int8Array(N).fill(-1);
+    this.roleNames.forEach((k, ri) => {
+      for (const i of this.groups[k]) {
+        if (this.roleOf[i] < 0) this.roleOf[i] = ri;
+        else if (this.roleOf2[i] < 0) this.roleOf2[i] = ri;
+        else throw new Error(`neuron ${i} is in more than two role pools (${k})`);
+      }
+    });
 
     this.rate = {};
     for (const k of this.roleNames) this.rate[k] = 0;
@@ -110,7 +122,12 @@ export class Brain {
       bitter:  ['grn_bitter'],
       odour:   ['orn'],
       touch:   ['mechano'],
-      heat:    ['thermo'],
+      // Hot and cold cells are separate populations in v783 (tools/build_brain.py splits
+      // them by sub_class): heat drives the 'heating' thermosensory cells; cool drives the
+      // 'cold' thermosensory cells plus the hygrosensory cells FlyWire labels as
+      // cooling / evaporative-cooling responsive. `thermo` remains the union for readouts.
+      heat:    ['thermo_hot'],
+      cool:    ['thermo_cold', 'hygro_cool'],
       damp:    ['hygro'],
       light:   ['visual'],
       looming: ['lc4', 'lplc2'],   // LC4 + LPLC2: the fly's actual looming detectors
@@ -118,6 +135,13 @@ export class Brain {
     this.stim = {};
     for (const k of Object.keys(this.STIM)) this.stim[k] = 0;
     this.stimDrive = 0.20;       // membrane units at level 1
+    // Per-channel multiplier on stimDrive. Explicit input gains, not a kernel change; the
+    // default is 1 for every channel. heat: the seven hot cells receive ~0.36 units/ms of
+    // tonic inhibition at rest from eight interneurons firing at the refractory ceiling, so
+    // the standard 0.20 drive never lifts them above threshold (measured: 0 Hz at 1x, 17 Hz at
+    // 1.5x, 170 Hz at 2.5x). 2.5x puts them in the band of the other driven sensory pools.
+    // tools/response_matrix.py applies the same gain so the NumPy reference agrees.
+    this.stimGain = { heat: 2.5 };
     this._active = [];           // rebuilt by setStim()
     this.sugar = 0;
     this.feedSpikes = 0;         // running total: proboscis + ingestion MN spikes
@@ -150,7 +174,7 @@ export class Brain {
       if (lv <= 0) continue;
       for (const r of this.STIM[k]) {
         const g = this.groups[r];
-        if (g) this._active.push({ idx: g, amt: lv * this.stimDrive });
+        if (g) this._active.push({ idx: g, amt: lv * this.stimDrive * (this.stimGain[k] || 1) });
       }
     }
     this.sugar = this.stim.sweet;
@@ -231,7 +255,7 @@ export class Brain {
         const i = spiked[s];
         this.lastSpikeMs[i] = this.ms;
         const r = this.roleOf[i];
-        if (r >= 0) this._cnt[r]++;
+        if (r >= 0) { this._cnt[r]++; const r2 = this.roleOf2[i]; if (r2 >= 0) this._cnt[r2]++; }
       }
       for (let r = 0; r < this.roleNames.length; r++) {
         const k = this.roleNames[r], n0 = this.groups[k].length;
