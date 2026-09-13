@@ -43,7 +43,7 @@ const scope = vm.createContext({
   quality:new AdaptiveQuality(), sim:simulated,
   $:()=>({hasAttribute:()=>false}), brain:{sugarFeedSpikes:0},
   controls:{update:()=>{}}, renderer:{render:()=>renders++}, scene:{}, camera:{},
-  neuralMap:{draw:()=>{}}, stepBall:()=>{}, applyQuality:()=>{},
+  neuralMap:{draw:()=>{}}, stepBall:()=>{}, stepRipples:()=>{}, applyQuality:()=>{},
   stepSimulation:()=>steps++, syncGeoms:()=>{}, model:{}, data:{},
 });
 vm.runInContext(app.slice(begin,end)+'\nglobalThis.tick=frame; globalThis.clock=()=>({last,acc,nextFrameAt});',scope);

@@ -655,6 +655,50 @@ function stepShuffle(b: Brain, d: MjData, dt: number) {
   }
 }
 
+// ------------------------------------------------------------- stimulus levels
+// Each sensory channel has two sources: the sustained switch (a button) and a transient pulse
+// (a poke). The brain receives max(switch, pulse); brain.setStim is only ever called from here,
+// so the two sources cannot clobber each other and the UI can show both.
+const stimSwitch: Record<string, number> = {};
+const stimPulse: Record<string, number> = {};
+function applyStim(k: string) {
+  const level = Math.max(stimSwitch[k] || 0, stimPulse[k] || 0);
+  if (brain.stim[k] !== level) brain.setStim(k, level);
+}
+
+// ------------------------------------------------------------- poke (direct touch)
+// A tap on the fly's body is a transient mechanosensory stimulus: the same 2,674-neuron
+// `mechano` population the Touch switch drives, held briefly and then released exponentially.
+// Stepped in brain time (1 ms per call from stepSimulation), not wall time, so a device running
+// below real time still delivers the same pulse to the same neurons. FAFB has one
+// mechanosensory pool, so a poke cannot say WHERE the fly was touched; region only scales the
+// hold — the antennae carry the fly's mechanosensory organ (Johnston's organ), so a hit on the
+// head or antennae holds longer than one on the abdomen or legs.
+const POKE = { hold:0.15, holdHead:0.30, release:0.5 };   // seconds of brain time
+const poke = { level:0, hold:0, count:0, last:'' };
+let headBody = -1;
+function bodyIsHead(body: number) {
+  for (let b = body; b > 0; b = model.body_parentid[b]) if (b === headBody) return true;
+  return false;
+}
+function pokeBody(body: number) {
+  if (headBody < 0) headBody = mujoco.mj_name2id(model, 1 /* mjOBJ_BODY */, 'head');
+  poke.level = 1;
+  poke.hold = bodyIsHead(body) ? POKE.holdHead : POKE.hold;
+  poke.count++;
+  poke.last = mujoco.mj_id2name(model, 1, body);
+  stimPulse.touch = 1; applyStim('touch');
+}
+function stepPoke(dt: number) {
+  if (poke.level <= 0) return;
+  if (poke.hold > 0) poke.hold = Math.max(0, poke.hold - dt);
+  else {
+    poke.level *= Math.exp(-dt / POKE.release);
+    if (poke.level < 0.01) poke.level = 0;
+  }
+  if (stimPulse.touch !== poke.level) { stimPulse.touch = poke.level; applyStim('touch'); }
+}
+
 function stepSimulation() {
   mujoco.mj_step(model, data);
   sim.steps++;
@@ -662,6 +706,7 @@ function stepSimulation() {
   // Neither calibration nor a body reset can put the brain ahead and freeze neural updates.
   if (sim.steps % 10 === 0) {
     brain.step(1);
+    stepPoke(0.001);
     applyBrainToActuators(brain, data);
     stepShuffle(brain, data, 0.001);
   }
@@ -700,7 +745,7 @@ function stepSimulation() {
     renderer.shadowMap.enabled = quality.profile.shadowSize > 0;
     renderer.shadowMap.type = THREE.PCFShadowMap;
     document.body.appendChild(renderer.domElement);
-    renderer.domElement.setAttribute('aria-label', `${document.body.dataset.namedFly || 'Fly'}, live fruit fly simulation. Drag to orbit; scroll to zoom.`);
+    renderer.domElement.setAttribute('aria-label', `${document.body.dataset.namedFly || 'Fly'}, live fruit fly simulation. Drag to orbit; scroll to zoom; tap the fly to touch it.`);
     renderer.domElement.setAttribute('role', 'img');
 
     // Keep the fly's horizontal framing on narrow screens rather than cropping its wings.
@@ -799,7 +844,7 @@ function stepSimulation() {
 
     buildDriveMap(model, brain);
     buildShuffleMap();
-    brain.setStim('sweet', 1);
+    stimSwitch.sweet = 1; applyStim('sweet');
     $('s_neu').textContent = brain.N.toLocaleString();
     $('s_syn').textContent = brain.meta.E.toLocaleString();
     $('s_nbody').textContent = String(model.nbody);
@@ -825,23 +870,77 @@ function stepSimulation() {
         continue;
       }
       btn.onclick = () => {
-        brain.setStim(k, brain.stim[k] > 0 ? 0 : 1);
+        stimSwitch[k] = (stimSwitch[k] || 0) > 0 ? 0 : 1;
+        applyStim(k);
         syncStimUI();
       };
     }
-    // Reflect brain.stim in every [data-stim] control and inspector row. Called on clicks and
-    // by any code that sets a stimulus programmatically, so the page never shows stale state.
+    // Buttons show the sustained switch; inspector rows show what the brain actually receives
+    // (switch or transient pulse). Called on clicks, on the HUD tick, and by any code that sets
+    // a stimulus programmatically, so the page never shows stale state.
+    const stimElements = [...document.querySelectorAll('[data-stim]')].filter((el): el is HTMLElement => el instanceof HTMLElement);
     function syncStimUI() {
-      for (const el of document.querySelectorAll('[data-stim]')) {
-        if (!(el instanceof HTMLElement)) continue;
-        const on = brain.stim[el.dataset.stim || ''] > 0;
-        el.classList.toggle('on', on);
+      for (const el of stimElements) {
+        const k = el.dataset.stim || '';
+        const on = el instanceof HTMLButtonElement ? (stimSwitch[k] || 0) > 0 : brain.stim[k] > 0;
+        if (el.classList.contains('on') !== on) el.classList.toggle('on', on);
         if (el instanceof HTMLButtonElement) el.setAttribute('aria-pressed', String(on));
       }
       $('sugar-label').textContent = brain.sugar > 0 ? 'Sugar on' : 'Sugar off';
       document.body.classList.toggle('is-sugar-off', brain.sugar <= 0);
     }
     syncStimUI();
+
+    // ---- poke: tap the fly to touch it
+    // A tap (short press, little movement) is raycast against the fly's visible geoms — the same
+    // meshes the render bridge syncs, so the hit body is read straight off the MuJoCo geom index.
+    // A drag is left to OrbitControls. The raycast reads the scene and never writes physics.
+    const flyMeshes = geomNodes.filter(g => g.group <= 2 && !g.isFloor).map(g => g.mesh);
+    const meshGeom = new Map(geomNodes.map(g => [g.mesh, g.gi]));
+    const tapRay = new THREE.Raycaster();
+    const ripples: { sprite: THREE.Sprite, t: number }[] = [];
+    const rippleTexture = (() => {
+      const N = 64, cv = document.createElement('canvas');
+      cv.width = cv.height = N;
+      const g = cv.getContext('2d');
+      if (!g) throw new Error('2D canvas is unavailable');
+      g.strokeStyle = '#fff6d8'; g.lineWidth = 5;
+      g.beginPath(); g.arc(N / 2, N / 2, N / 2 - 4, 0, Math.PI * 2); g.stroke();
+      const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace;
+      return tex;
+    })();
+    const flySize = new THREE.Vector3(); flyBox.getSize(flySize);
+    const rippleSize = Math.max(flySize.x, flySize.y) * 0.12;
+    function pokeAtScreen(clientX: number, clientY: number) {
+      tapRay.setFromCamera(new THREE.Vector2(clientX / innerWidth * 2 - 1, -(clientY / innerHeight) * 2 + 1), camera);
+      const hit = tapRay.intersectObjects(flyMeshes, false)[0];
+      if (!hit || !(hit.object instanceof THREE.Mesh)) return null;
+      const gi = meshGeom.get(hit.object);
+      if (gi === undefined) return null;
+      pokeBody(model.geom_bodyid[gi]);
+      const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: rippleTexture, transparent: true, depthTest: false, depthWrite: false }));
+      sprite.position.copy(hit.point); sprite.renderOrder = 10;
+      scene.add(sprite); ripples.push({ sprite, t: 0 });
+      return poke.last;
+    }
+    function stepRipples(dt: number) {
+      for (let i = ripples.length - 1; i >= 0; i--) {
+        const r = ripples[i];
+        r.t += dt;
+        const u = Math.min(1, r.t / 0.45);
+        r.sprite.scale.setScalar(rippleSize * (0.5 + 1.8 * u));
+        r.sprite.material.opacity = 1 - u;
+        if (u >= 1) { scene.remove(r.sprite); r.sprite.material.dispose(); ripples.splice(i, 1); }
+      }
+    }
+    const tap = { x:0, y:0, t:0, id:-1 };
+    renderer.domElement.addEventListener('pointerdown', e => { tap.x = e.clientX; tap.y = e.clientY; tap.t = performance.now(); tap.id = e.pointerId; });
+    renderer.domElement.addEventListener('pointerup', e => {
+      if (e.pointerId !== tap.id) return;
+      tap.id = -1;
+      if (Math.hypot(e.clientX - tap.x, e.clientY - tap.y) > 8 || performance.now() - tap.t > 350) return;
+      pokeAtScreen(e.clientX, e.clientY);
+    });
 
     for (const [triggerId, dialogId] of [['b_about', 'about'], ['b_inspect', 'inspect']]) {
       const dialog = $(dialogId);
@@ -929,6 +1028,7 @@ function stepSimulation() {
       // Hidden inspector statistics do not need per-frame DOM work.
       if (now >= hudAt && $('inspect').hasAttribute('open')) {
         hudAt = now + 200;
+        syncStimUI();
         $('s_fps').textContent  = fps.toFixed(0);
         $('s_time').textContent = data.time.toFixed(2) + ' s';
         $('s_bms').textContent  = ((brain.ms - sim.brainStartMs) / 1000).toFixed(2) + ' s';
@@ -954,6 +1054,7 @@ function stepSimulation() {
       $('s_cnt').textContent  = brain.sugarFeedSpikes.toLocaleString();
 
       if (!sim.paused) stepBall(wall);
+      stepRipples(wall);
       controls.update();
       renderer.render(scene, camera);
       if (now >= mapAt) {
@@ -974,7 +1075,7 @@ function stepSimulation() {
     const flyWindow = (window as Window & typeof globalThis & { fly?: unknown, __flyReady?: boolean, __flyError?: string });
     flyWindow.fly = { mujoco, model, data, brain, sim, scene, camera, renderer, controls, geomNodes, quality,
                    applyBrain: () => applyBrainToActuators(brain, data), driveMap, shuffle, shuffleLegs,
-                   stepSimulation,
+                   stepSimulation, stimSwitch, stimPulse, applyStim, syncStimUI, poke, pokeBody, pokeAtScreen,
                    sync: () => syncGeoms(model, data),
                    stepBall, get ball() { return ball; }, get world() { return world; },
                    dbg: () => ({ paused: sim.paused, acc, steps: sim.steps, time: data.time,
