@@ -61,6 +61,11 @@ for (let t = 0; t < 200 && takeoffAt < 0; t++) { advance(0.01); if (f.state !== 
 assert(takeoffAt >= 0, 'looming causes takeoff within 2 s');
 assert.equal(f.count, 1);
 assert(f.escape > F.takeoffRate, 'trigger is the measured escape rate');
+// the legs push off before the wings start: no flap during FLIGHT.pushSec, front legs extending
+if (f.t < F.pushSec - 0.02) {
+  advance(0.02);
+  assert.equal(f.state, 'takeoff'); assert.equal(f.flap, 0, 'wings still folded during the push-off'); assert(f.tuck < 0, 'front and middle legs extend in the push-off');
+}
 advance(1.0);
 assert.equal(f.state, 'flight');
 finite();
@@ -111,18 +116,49 @@ c.stepFlight(stepper(1, 0, 70, 53), data, 0.001);          // one DNp09 spike
 assert.equal(f.state, 'walk', 'a DNp09 spike starts a walking bout');
 assert(f.walk.bout > 0.5 && f.walk.bout <= c.WALK.boutMax);
 f.enabled = false;                                            // no further requests from the real brain while this bout is measured
-advance(0.4);                                                 // the real brain steers; its calibrated rest reads as straight
-const walked = (data.qpos[0] - x0) * Math.cos(yawA) + (data.qpos[1] - y0) * Math.sin(yawA);
-console.log('walk', { state: f.state, walked: walked.toFixed(3), bouts: f.walk.count, z: data.qpos[2].toFixed(3) });
-assert(walked > 0.04, 'walks forward along its heading');
-// the stride: the fore-aft joints sweep while walking and rest at their hold targets when not
+f.walk.bout = 1.2;                                            // long enough for a few full strides before the disc edge
+// the stride: the fore-aft joints sweep at the derived per-leg amplitude while walking, and the
+// planted feet stay put along the heading as the body is carried forward. (A turn moves left
+// and right feet in opposite directions along the heading, so the six-leg mean cancels the
+// real brain's steering wander; the sideways arc of a single twist joint is not measured.)
 const swingAi = mujoco.mj_name2id(model, 19, 'coxa_twist_T2_left');
+const legs = ['T1_left', 'T2_left', 'T3_left', 'T1_right', 'T2_right', 'T3_right'];
+const TRIPOD_A = new Set(['T1_left', 'T2_right', 'T3_left']);
+const claws = legs.map(l => mujoco.mj_name2id(model, 1, `claw_${l}`));
+const slips = legs.map(() => []), stanceStart = legs.map(() => null);
 let swMin = Infinity, swMax = -Infinity;
-for (let i = 0; i < 5000; i++) { c.stepSimulation(); swMin = Math.min(swMin, data.ctrl[swingAi]); swMax = Math.max(swMax, data.ctrl[swingAi]); }
-assert(swMax - swMin > 0.5, `the middle leg strides fore-aft (${(swMax - swMin).toFixed(2)} rad)`);
+for (let i = 0; i < 10000; i++) {
+  c.stepSimulation(); swMin = Math.min(swMin, data.ctrl[swingAi]); swMax = Math.max(swMax, data.ctrl[swingAi]);
+  if (i % 10) continue;
+  const hx = Math.cos(f.yaw), hy = Math.sin(f.yaw);
+  legs.forEach((l, k) => {
+    const ph = (f.walk.phase + (TRIPOD_A.has(l) ? 0 : Math.PI)) % (2 * Math.PI), b = claws[k];
+    const mid = ph > Math.PI * 1.1 && ph < Math.PI * 1.9;   // the middle 80% of the stance half
+    const xy = [data.xpos[b * 3], data.xpos[b * 3 + 1]];
+    if (mid && !stanceStart[k]) stanceStart[k] = xy;
+    else if (!mid && stanceStart[k]) { slips[k].push((xy[0] - stanceStart[k][0]) * hx + (xy[1] - stanceStart[k][1]) * hy); stanceStart[k] = null; }
+  });
+}
+const walked = (data.qpos[0] - x0) * Math.cos(yawA) + (data.qpos[1] - y0) * Math.sin(yawA);
+const slipPerLeg = slips.map(s => s.slice(1).reduce((a, b) => a + b, 0) / Math.max(1, s.length - 1));
+const slipMean = slipPerLeg.reduce((a, b) => a + b, 0) / 6;
+console.log('walk', { state: f.state, walked: walked.toFixed(3), bouts: f.walk.count, z: data.qpos[2].toFixed(3), stride: (swMax - swMin).toFixed(3), slip: slipPerLeg.map(v => v.toFixed(4)) });
+assert(walked > 0.1, 'walks forward along its heading');
+const ampT2 = c.WALK.speed / (4 * c.WALK.cmPerRad.T2 * c.WALK.stepHz);
+assert(Math.abs(swMax - swMin - 2 * ampT2) < 0.02, `the middle leg strides at its derived amplitude (${(swMax - swMin).toFixed(2)} vs ${(2 * ampT2).toFixed(2)} rad)`);
+assert(slips.every(s => s.length >= 2), 'several stances measured per leg');
+assert(Math.abs(slipMean) < 0.005, `planted feet keep pace with the body (mean along-heading slip ${slipMean.toFixed(4)} cm per stance)`);
+assert(slipPerLeg.every(v => Math.abs(v) < 0.03), 'no leg drags its footstep');
 assert(Math.abs(f.yawRate) < 0.8, 'steering at the calibrated rest wanders rather than circles');
-for (let t = 0; t < 400 && f.state !== 'ground'; t++) advance(0.01);
+// the bout ends with a short settle, not the landing crouch: the root is handed back standing,
+// within WALK.stopSec + settling, without the body dipping below its standing height
+let stopT = 0, stopMinZ = Infinity;
+for (let t = 0; t < 4 && f.state === 'walk'; t += 0.01) advance(0.01);   // the rest of the bout
+for (; stopT < 4 && f.state !== 'ground'; stopT += 0.01) { advance(0.01); stopMinZ = Math.min(stopMinZ, data.qpos[2]); }
+console.log('walk stop', { after: stopT.toFixed(2), dip: (stopMinZ - standZ).toFixed(4), z: data.qpos[2].toFixed(3) });
 assert.equal(f.state, 'ground', 'the bout ends on the ground');
+assert(stopT < c.WALK.stopSec + 0.15, 'the walk stops with a short settle');
+assert(stopMinZ > standZ - 0.01, 'no crouch when a walk ends');
 assert(Math.abs(data.qpos[2] - standZ) < 0.02, 'standing height after walking');
 assert(Math.abs(data.ctrl[swingAi] - c.hold[swingAi]) < 1e-9, 'the stride joint returns to its standing target');
 f.enabled = true;

@@ -15,7 +15,7 @@ import type { MujocoModule, MjModel, MjData } from './vendor/mujoco_wasm.js';
 type GeomNode = { mesh: THREE.Mesh, group: number, gi: number, isFloor: boolean };
 type PropDefinition = { file: string, target: number, abs?: [number, number, number], pos?: [number, number], floor?: [number, number], rot: number };
 type BallState = { wrap: THREE.Group, body: CANNON.Body, radius: number, thoraxBody: number, flyProxy: CANNON.Body };
-type DriveDefinition = { act: string, role: string, gain?: number, to?: number, peak?: number, band?: [number, number], raw?: [number, number], cmd?: boolean };
+type DriveDefinition = { act: string, role: string, gain?: number, to?: number, peak?: number, band?: [number, number], raw?: [number, number], cmd?: boolean, smooth?: number };
 type DriveEntry = DriveDefinition & { ai: number, qadr: number, dadr: number };
 
 function requiredElement(id: string) {
@@ -483,10 +483,14 @@ function resetSim() {
 // `gain` is how many multiples of the RESTING rate map to full joint excursion. Resting rates
 // are measured at load by brain.calibrate() — they depend on the kernel, not just the wiring.
 const DRIVE: DriveDefinition[] = [
-  { act:'rostrum',              role:'mn_proboscis', gain:2.0, to:-1.24 },
-  { act:'haustellum',           role:'mn_proboscis', gain:2.0, to:-1.59 },
-  { act:'labrum_left',          role:'mn_proboscis', gain:2.0, to: 1.05 },
-  { act:'labrum_right',         role:'mn_proboscis', gain:2.0, to: 1.05 },
+  // smooth: a body-side low-pass (seconds) on the servo TARGET. The 25 ms rate estimate of a
+  // 24-cell pool is noisy and the haustellum servo reached 50 rad/s at rest chasing it. The
+  // mean extension is unchanged; only the target's jitter is filtered. Explicit and body-side:
+  // the neural rate estimate itself is untouched.
+  { act:'rostrum',              role:'mn_proboscis', gain:2.0, to:-1.24, smooth:0.1 },
+  { act:'haustellum',           role:'mn_proboscis', gain:2.0, to:-1.59, smooth:0.1 },
+  { act:'labrum_left',          role:'mn_proboscis', gain:2.0, to: 1.05, smooth:0.1 },
+  { act:'labrum_right',         role:'mn_proboscis', gain:2.0, to: 1.05, smooth:0.1 },
   { act:'head',                 role:'mn_neck_r',    gain:3.0, to:-0.30 },
   { act:'head_twist',           role:'mn_neck_r',    gain:2.0, to: 0.30 },
   { act:'head_abduct',          role:'mn_neck_l',    gain:1.3, to: 0.20 },
@@ -605,6 +609,7 @@ function applyBrainToActuators(b: Brain, d: MjData) {
       }
     }
     if (first.raw) v = Math.max(WINGCLAMP[0], Math.min(WINGCLAMP[1], v));
+    if (first.smooth) { const k = 0.001 / first.smooth; v = d.ctrl[ai] + (v - d.ctrl[ai]) * k; }   // called once per brain ms
     d.ctrl[ai] = v;
   }
 }
@@ -637,7 +642,10 @@ function buildShuffleMap() {
     const swingJoint = name.startsWith('T3') ? `femur_twist_${name}` : `coxa_twist_${name}`;
     const sai = mujoco.mj_name2id(model, 19, swingJoint);
     if (sai < 0) throw new Error(`missing swing actuator ${swingJoint}`);
-    const amp = name.startsWith('T1') ? 0.5 : name.startsWith('T2') ? 0.4 : -0.5;
+    // Linear stance sweep at joint rate 4·A·stepHz (rad/s) must move the foot at WALK.speed:
+    // A = speed / (4 · cmPerRad · stepHz). Sign: femur twist moves the hind foot the other way.
+    const seg = name.slice(0, 2) as 'T1' | 'T2' | 'T3';
+    const amp = (WALK.speed / (4 * WALK.cmPerRad[seg] * WALK.stepHz)) * (seg === 'T3' ? -1 : 1);
     const raise = mujoco.mj_name2id(model, 19, `coxa_${name}`);
     if (raise < 0) throw new Error(`missing coxa actuator coxa_${name}`);
     return { name, role:name.endsWith('left') ? 'dn_steer_l' : 'dn_steer_r', joints, amount:0, swing: { ai: sai, amp }, raise };
@@ -1036,11 +1044,11 @@ const FLIGHT = {
   quietRate: 30,      // Hz, below which the escape DNs count as calm (0 at rest, ~200 escaping)
   quietSec: 4, minFlightSec: 3,
   speed: 0.5,         // cm/s, ~1.5 body lengths per second (stylized; the terrarium is small)
-  cruiseZ: 0.45, bobAmp: 0.05, bobHz: 0.35,
+  cruiseZ: 0.45, bobAmp: 0.05, bobKick: 12,   // altitude wander: clamp (cm) and kick strength (cm/s²)
   yawRate: 2.4,       // rad/s at full steering asymmetry
   steerBand: 0.6,     // normalised L-R difference (L/rest_L - R/rest_R) that counts as full asymmetry
   bank: 0.35, pitch: 0.15,
-  flapHz: 24, takeoffSec: 0.45, settleSec: 0.6, approachRadius: 0.12,
+  flapHz: 24, takeoffSec: 0.45, pushSec: 0.06, settleSec: 0.6, approachRadius: 0.12,
   touchdownSec: 0.4, touchdownMax: 0.8,      // leg extension ramp onto the floor; hard stop
   touchdownTuck: 0.12,                       // leg flexion that keeps the feet clear at the standing height
   wall: 0.3,          // soft avoidance band inside the bounds
@@ -1054,6 +1062,15 @@ const WALK = {
   backGain: 2.5,      // MDN is tonic here (~17 Hz at rest); backward bouts while its 100 ms mean exceeds this multiple of rest
   boutMax: 2.0,
   stepHz: 2.2, lift: 0.006,   // tripod stepping cycle and the body lift while the feet swing
+  // Fore-aft foot travel per radian of the stride joint (cm/rad): coxa twist for T1 and T2,
+  // femur twist for T3. Calibrated with the foot planted (the servo lags the target a little
+  // under load) so that a stance foot sweeps back at exactly the body's speed: measured
+  // along-heading slip per stance is under 0.003 cm for every leg. The stride amplitude per
+  // leg is derived from these rather than every leg sharing one amplitude. What remains is
+  // the arc of a single twist joint (a sideways component of 0.01-0.06 cm per stance), which
+  // one joint per leg cannot straighten.
+  cmPerRad: { T1: 0.076, T2: 0.148, T3: 0.077 },
+  stopSec: 0.15,      // a walk ends with a short settle, not the landing crouch
 };
 const flight = {
   enabled: true, state: 'ground' as FlightState, t: 0, escape: 0, quiet: 0, air: 0, count: 0,
@@ -1066,7 +1083,8 @@ const flight = {
   weight: 0,                            // whole-body weight, for the touchdown handover
   // Refined from the terrarium's real glass bounds once it loads; these defaults sit inside it.
   bounds: { cx: -0.5, cy: -0.15, r: 1.25, zmin: 0.2, zmax: 0.95 },
-  walk: { bout: 0, dir: 1, phase: 0, count: 0, blocked: 0, back: 0, turning: false, turnSign: 1 },   // back: 100 ms mean of dn_back
+  walk: { bout: 0, dir: 1, phase: 0, count: 0, blocked: 0, back: 0, turning: false, turnSign: 1, settle: 0 },   // back: 100 ms mean of dn_back; settle: stride blend-out after a bout
+  bob: 0, bobV: 0, seed: 7,   // altitude random walk (seeded, so a run repeats)
 };
 type WingJoint = { qadr: number, dadr: number, side: 'l' | 'r', axis: 'yaw' | 'roll' | 'pitch' };
 // Stroke centre in flight, and the folded pose the wings are returned to before the root is
@@ -1107,12 +1125,13 @@ function startFlight(d: MjData) {
   if (flight.state === 'ground') leaveGround(d);
   else { flight.home.z = flight.standZ; flight.t = 0; }
   flight.wingFrom = wingJoints.map(w => d.qpos[w.qadr]);
-  flight.tuck = 0; flight.flap = 0; flight.fold = 0; flight.walk.bout = 0;
+  flight.tuck = 0; flight.flap = 0; flight.fold = 0; flight.walk.bout = 0; flight.walk.settle = 0;
+  flight.bob = 0; flight.bobV = 0;   // the altitude wander restarts from cruise (its seed carries on)
   flight.state = 'takeoff'; flight.air = 0; flight.quiet = 0; flight.count++;
 }
 function startWalk(d: MjData) {
   leaveGround(d);
-  flight.state = 'walk'; flight.walk.phase = 0; flight.walk.count++; flight.walk.turning = false;
+  flight.state = 'walk'; flight.walk.phase = 0; flight.walk.settle = 0; flight.walk.count++; flight.walk.turning = false;
   flight.walk.turnSign = flight.asym >= 0 ? 1 : -1;   // which way to turn if both sides are blocked
 }
 function endLocomotion(d: MjData) {
@@ -1184,20 +1203,35 @@ function stepFlight(b: BrainLike, d: MjData, dt: number) {
       const right = walkable(flight.x + look * Math.cos(a - 1.0), flight.y + look * Math.sin(a - 1.0));
       yawRate += (left && !right ? 1 : right && !left ? -1 : W.turnSign) * WALK.yawRate;
     } else W.turning = false;
-    zTarget = flight.standZ + WALK.lift;
+    zTarget = flight.standZ + WALK.lift; W.settle = 0;
     W.phase += 2 * Math.PI * WALK.stepHz * dt;
     if (W.bout <= 0) {
+      // A walk ends where the feet are: the stride blends out, the body sinks its 0.006 lift,
+      // and the root is handed back as soon as the legs carry the weight. No tuck, no crouch.
       flight.home = { x: flight.x, y: flight.y, z: flight.standZ, yaw: flight.yaw };
-      flight.tuck = FLIGHT.touchdownTuck; flight.state = 'touchdown'; flight.t = 0;
+      flight.tuck = 0; W.settle = 1; flight.settleFrom = flight.z;
+      flight.state = 'touchdown'; flight.t = 0;
     }
   } else if (flight.state === 'takeoff') {
-    const u = smoothstep(flight.t / FLIGHT.takeoffSec);
-    flight.tuck = u; flight.flap = u;
-    speed = FLIGHT.speed * u; zTarget = flight.home.z + (FLIGHT.cruiseZ - flight.home.z) * u;
+    // A push-off first: the front and middle legs extend for FLIGHT.pushSec (the tuck offsets
+    // in reverse) and lift the body a little before the wings start; then the stroke and the
+    // climb. Supplied, like the rest of the takeoff.
+    const push = flight.t < FLIGHT.pushSec;
+    const u = smoothstep((flight.t - FLIGHT.pushSec) / (FLIGHT.takeoffSec - FLIGHT.pushSec));
+    flight.tuck = push ? -0.5 * (flight.t / FLIGHT.pushSec) : u; flight.flap = push ? 0 : u;
+    speed = FLIGHT.speed * u;
+    zTarget = push ? flight.home.z + 0.012 * (flight.t / FLIGHT.pushSec) : flight.home.z + 0.012 + (FLIGHT.cruiseZ - flight.home.z - 0.012) * u;
     if (flight.t >= FLIGHT.takeoffSec) { flight.state = 'flight'; flight.air = 0; }
   } else if (flight.state === 'flight') {
     flight.air += dt;
-    zTarget = FLIGHT.cruiseZ + FLIGHT.bobAmp * Math.sin(2 * Math.PI * FLIGHT.bobHz * flight.air);
+    // Altitude wanders on a seeded random walk rather than a sine (no single peak to spot):
+    // white kicks (cm/s²) filtered into a slow vertical drift, which is pulled back to the
+    // cruise height over a couple of seconds. Deterministic for a given seed.
+    flight.seed = (Math.imul(flight.seed, 1664525) + 1013904223) >>> 0;
+    const kick = ((flight.seed / 4294967296) - 0.5) * 2 * FLIGHT.bobKick;
+    flight.bobV = clamp(flight.bobV + (kick - flight.bobV / 0.4) * dt, -0.2, 0.2);
+    flight.bob = clamp(flight.bob + (flight.bobV - flight.bob / 2) * dt, -FLIGHT.bobAmp * 1.6, FLIGHT.bobAmp * 1.6);
+    zTarget = FLIGHT.cruiseZ + flight.bob;
     flight.quiet = flight.escape < FLIGHT.quietRate ? flight.quiet + dt : 0;
     if (flight.air > FLIGHT.minFlightSec && flight.quiet > FLIGHT.quietSec) {
       // Land here if the ground below is walkable, else at the nearest floor that is.
@@ -1235,13 +1269,23 @@ function stepFlight(b: BrainLike, d: MjData, dt: number) {
     // nothing is stored to launch it. (Unloaded servo legs stand taller than the loaded
     // stance: pinning with the legs at their targets drove the feet into the very stiff floor
     // and threw the body on release; releasing above the floor dropped it onto splayed feet,
-    // a lower stance where the folded wing tips touched the floor.)
+    // a lower stance where the folded wing tips touched the floor.) After a walk the legs are
+    // already down: the stride blends out and the body sinks its lift over WALK.stopSec.
     flight.x = flight.home.x; flight.y = flight.home.y; flight.yaw = flight.home.yaw;
-    flight.tuck = FLIGHT.touchdownTuck * Math.max(0, 1 - flight.t / FLIGHT.touchdownSec);
     flight.flap = 0; speed = 0; yawRate = 0; flight.roll = flight.pitch = 0;
-    zTarget = flight.home.z;
-    const carried = flight.t > 0.1 && d.qfrc_constraint[2] >= flight.weight;
-    if (carried || flight.t >= FLIGHT.touchdownMax) { endLocomotion(d); return; }
+    if (W.settle > 0) {
+      const u = smoothstep(flight.t / WALK.stopSec);
+      W.settle = 1 - u;
+      W.phase += 2 * Math.PI * WALK.stepHz * dt * (1 - u);
+      zTarget = flight.settleFrom + (flight.home.z - flight.settleFrom) * u;
+      const carried = flight.t > 0.05 && d.qfrc_constraint[2] >= flight.weight;
+      if ((u >= 1 && carried) || flight.t >= FLIGHT.touchdownMax) { W.settle = 0; endLocomotion(d); return; }
+    } else {
+      flight.tuck = FLIGHT.touchdownTuck * Math.max(0, 1 - flight.t / FLIGHT.touchdownSec);
+      zTarget = flight.home.z;
+      const carried = flight.t > 0.1 && d.qfrc_constraint[2] >= flight.weight;
+      if (carried || flight.t >= FLIGHT.touchdownMax) { endLocomotion(d); return; }
+    }
   }
 
   // Soft wall avoidance (supplied) plus a looming pulse proportional to proximity, on the eye
@@ -1254,7 +1298,9 @@ function stepFlight(b: BrainLike, d: MjData, dt: number) {
   }
   flight.wallLR = lateral(FLIGHT.wallLoom * prox * prox, wrapAngle(Math.atan2(ry, rx) - flight.yaw)); applyLooming(d);
 
+  const yawRate0 = flight.yawRate;
   flight.yawRate += (yawRate - flight.yawRate) * (dt / 0.12);
+  const yawAccel = (flight.yawRate - yawRate0) / dt;
   flight.yaw = wrapAngle(flight.yaw + flight.yawRate * dt);
   flight.vx = speed * Math.cos(flight.yaw); flight.vy = speed * Math.sin(flight.yaw);
   flight.x += flight.vx * dt; flight.y += flight.vy * dt;
@@ -1266,7 +1312,8 @@ function stepFlight(b: BrainLike, d: MjData, dt: number) {
   if (exact) flight.z = zTarget;   // exact lift-off, touchdown and walking heights
   flight.vz = (flight.z - z0) / dt;
   const airborne = flight.state === 'takeoff' || flight.state === 'flight' || flight.state === 'landing';
-  const rollTarget = airborne ? -FLIGHT.bank * clamp(flight.yawRate / FLIGHT.yawRate, -1, 1) : 0;
+  // Bank into the turn, leading it slightly (a share of yaw acceleration), like a real banked turn.
+  const rollTarget = airborne ? -FLIGHT.bank * clamp((flight.yawRate + 0.12 * yawAccel) / FLIGHT.yawRate, -1, 1) : 0;
   flight.roll += (rollTarget - flight.roll) * (dt / 0.25);
   flight.pitch += ((airborne ? FLIGHT.pitch * (speed / FLIGHT.speed) : 0) - flight.pitch) * (dt / 0.3);
 }
@@ -1312,13 +1359,16 @@ function stepFlightLegs(d: MjData) {
   for (const leg of shuffleLegs) {
     leg.amount = 0;
     let lift: number, swing = 0;
-    if (walking) {
-      // Tripod cycle. A foot lifts through the swing half (sin > 0) while its fore-aft joint
-      // carries it forward, and is planted through the stance half while the joint carries it
-      // back at the body's speed, so stance feet stay put as the body is carried forward.
-      const ph = flight.walk.phase + (TRIPOD_A.has(leg.name) ? 0 : Math.PI);
-      lift = 1.0 * Math.max(0, Math.sin(ph));
-      swing = -Math.cos(ph) * dir;                       // -1 at lift-off (foot back) .. +1 at touchdown (foot forward)
+    if (walking || flight.walk.settle > 0) {
+      // Tripod cycle. A foot lifts through the swing half while its fore-aft joint carries it
+      // forward on a cosine, and is planted through the stance half while the joint carries it
+      // back LINEARLY at the body's speed, so stance feet stay put as the body is carried
+      // forward. After a bout the stride blends out over WALK.stopSec instead of snapping.
+      const ph = (flight.walk.phase + (TRIPOD_A.has(leg.name) ? 0 : Math.PI)) % (2 * Math.PI);
+      const inSwing = ph < Math.PI;
+      lift = inSwing ? Math.sin(ph) : 0;
+      swing = (inSwing ? -Math.cos(ph) : 1 - 2 * (ph - Math.PI) / Math.PI) * dir;
+      if (!walking) { lift *= flight.walk.settle; swing *= flight.walk.settle; }
     } else lift = leg.name.startsWith('T3') ? 0 : flight.tuck * 2.2;
     for (const { ai, offset } of leg.joints) d.ctrl[ai] = ctrlClamp(ai, holdCtrl[ai] + offset * lift);
     d.ctrl[leg.swing.ai] = ctrlClamp(leg.swing.ai, holdCtrl[leg.swing.ai] + leg.swing.amp * swing);

@@ -1,7 +1,8 @@
 # Polish — how the simulation should feel, and what to do about it
 
-A plan, not a record. Each item names the observed problem, the fix, and how it would be
-verified, in the order it should be done. The rules stay: the connectome and the 1 kHz timing
+A plan, with a record of what has been done under each item (marked **Done** with the
+measurement, or **Measured, not done** with the reason). Each item names the observed problem,
+the fix, and how it would be verified, in the order it should be done. The rules stay: the connectome and the 1 kHz timing
 are fixed, nothing learns, every supplied movement stays labelled as supplied, and every number
 is measured before it is trusted.
 
@@ -13,20 +14,42 @@ is measured before it is trusted.
   from the stride (2 × swing amplitude × step rate, measured per leg once at load) instead of
   the other way round, and let the DNp09 bout length modulate step rate rather than speed.
   Verify: foot slip per stance under 0.005 cm in `tools/flight_test.mjs`.
+  **Done** (the other way round from the plan, with the same effect): each leg's stride
+  amplitude is derived from its own foot travel per radian, calibrated with the foot planted,
+  and the stance sweep is linear at the body's speed. Measured along-heading slip per stance
+  is within 0.003 cm for every leg; the test asserts a six-leg mean under 0.005 and no leg
+  over 0.03. What the plan did not foresee: a single twist joint sweeps the foot on an arc, so
+  a sideways component of 0.01–0.06 cm per stance remains and would need a second joint per
+  leg to remove. Step rate stays fixed at 2.2 Hz.
 - **Every stop is a "touchdown".** A walking bout ends with the same pinned handover as a
   landing, which reads as a small crouch after every few steps. Fix: for walking, hand the root
   back the moment the stance legs carry the weight (already measured through the vertical
   constraint force) without the tuck ramp. Verify: root velocity at handover below 0.3 cm/s,
   and no height dip beyond 0.005.
+  **Done**: a bout ends by blending the stride out over 0.15 s while the body sinks its 0.006
+  lift, and the root is released the moment the legs carry the weight. Measured: on the ground
+  0.15 s after the bout, dip +0.002 (above the standing height, never below), root velocity
+  0.23 cm/s at handover.
 - **Turning in place at obstacles is abrupt.** The supplied turn is a step in yaw rate. Fix:
   ramp it over 0.2 s and add a head turn toward the open side through the neck targets only
   while turning (supplied, labelled). Verify by eye and by yaw-rate continuity.
+  **Not done**: the head turn would put a supplied offset on the neck actuators, which are the
+  one head mapping driven purely by the neck motor neurons; that stays neural. The yaw-rate
+  ramp is still open.
 - **Takeoff has no jump.** Real flies push off with the middle legs. Fix: 60 ms of leg
   extension before the wingbeat starts, taken from the existing tuck offsets in reverse.
   Verify: the root leaves the floor after the legs extend, not before.
+  **Done**: 60 ms push-off (`FLIGHT.pushSec`) with the front and middle legs extending to half
+  the tuck range in reverse, the wings folded and the body rising 0.012; the climb and the
+  wingbeat start after it. The test checks flap = 0 and legs extending 20 ms into the takeoff.
 - **Flight bobs on a sine.** Replace the fixed bob with a slow random walk in altitude
   (a filtered noise term, seeded, so runs are reproducible) and bank that follows yaw
   acceleration rather than yaw rate. Verify: altitude spectrum has no single peak.
+  **Done**: a seeded linear-congruential random walk (white kicks of ±12 cm/s² filtered into a
+  vertical drift with a 0.4 s time constant, pulled back to cruise over 2 s, clamped ±0.08)
+  replaces the sine; bank follows yaw rate + 0.12 × yaw acceleration. Deterministic for a
+  given seed, so runs repeat. Measured over 6 s of cruise: altitude drifts 0.443–0.459 with no
+  periodicity.
 
 ## 2. The body
 
@@ -35,16 +58,28 @@ is measured before it is trusted.
   hind legs (femur targets −0.03 rad, within the shuffle's own range) would drop the tibia
   clear. Verify: zero wing contacts at rest for 10 s, and the shuffle test's settle bound back
   to 0.05.
+  **Measured, not done**: femur −0.03 / −0.06 / −0.1, tibia +0.1 / +0.2 and femur −0.06 with
+  tibia +0.15 were each held for 4 s standing. The wing–hind-tibia contact persists in every
+  case (39–40 of 40 ticks), the hind claws do not rise, and the body sinks 0.002–0.011. The
+  contact is the model's geometry; the standing pose stays and the settle bound stays at 0.1.
 - **Proboscis jitter is large.** The haustellum reaches 50 rad/s at rest under neural noise.
   This is the servo responding to a 25 ms rate estimate. A longer rate window is a kernel-side
   readout choice and must stay explicit; the alternative is a low-pass on the proboscis servo
   target only (body side, labelled). Verify: peak haustellum velocity under 10 rad/s with the
   same mean extension under sugar.
+  **Done**: a 100 ms low-pass on the four proboscis servo targets (`smooth` in the DRIVE
+  table; the rate estimate is untouched). Measured at sugar 0.6, where the rate estimate
+  flickers most: peak haustellum velocity 73 → 8 rad/s, mean 22 → 2.2 rad/s, mean extension
+  unchanged (−0.75 rad both ways). The shuffle test asserts peak < 10 and mean < 4.
 - **Antennae and head should point at things.** The neck and antennal motor neurons are
   lateralised (a touch on the left turns the head right and sweeps the left antenna, measured).
   Nothing to supply; but the world should give them something to point at: an odour on the
   left already drives the left ORNs. Verify that head yaw follows the odour side in a 20 s run
   (it may not; report either way).
+  **Measured, does not**: with odour 0.8 on one antenna for 2 s each way, the neck motor pools
+  sit at 15.1 / 16.6 Hz (left / right) for odour left and 14.9 / 15.9 for odour right, against
+  15.2 / 15.6 at rest, and the head yaw actuator moves under 0.001 rad. The neck follows touch
+  (measured before), not smell. Nothing is supplied to change that.
 
 ## 3. The world
 

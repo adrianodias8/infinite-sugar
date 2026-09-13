@@ -20,8 +20,9 @@ is supplied and says nothing about the fly.
 | supplied | value |
 |---|---|
 | wingbeat | 24 Hz stylized stroke: yaw sweeps 0.35 ± 0.85 rad, roll 1.0 ± 0.35, pitch −0.7 ± 0.35 (a real 200 Hz stroke is invisible at 60 fps) |
-| airspeed, height | 0.5 cm/s, cruise 0.45 cm above the perch with a slow 0.05 bob (stylized; the terrarium is small) |
-| bank, pitch | 0.35 rad into turns, 0.15 nose-down at speed |
+| airspeed, height | 0.5 cm/s, cruise 0.45 cm above the perch; altitude wanders on a seeded random walk (white kicks filtered into a slow vertical drift, pulled back to cruise over 2 s, clamped ±0.08) rather than a sine, so there is no single peak to spot (stylized; the terrarium is small) |
+| bank, pitch | 0.35 rad into turns, led by yaw acceleration (bank ∝ yaw rate + 0.12 × yaw acceleration); 0.15 nose-down at speed |
+| takeoff | 60 ms push-off first: the front and middle legs extend (the tuck offsets in reverse) and the body rises 0.012 with the wings still folded, then the climb and the wingbeat start |
 | legs | front and middle legs tuck using the shuffle joints; hind legs stay at their standing targets |
 | bounds | 72 % of the glass's inner radius, below its roof; a soft turn toward the centre inside a 0.3 band |
 | landing path | fly back over the perch, descend, settle, touchdown |

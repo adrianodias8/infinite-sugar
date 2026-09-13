@@ -114,8 +114,10 @@ resting wing biases: none inside the actuator band clears the wing from the hind
 joint saturates near 1.0 rad). Roll 0.0018 / yaw −0.0020 had the least neural-off jitter
 (0.022 rad/s against 0.058), but after a landing the tibia caught the more outward-swept
 membrane and held both wings forward at 0.56 rad instead of the folded 0.8–0.9. The original
-bias stays; the contact is real geometry and is left as it is. The honest fix is in the
-standing pose of the hind legs, not the wing mapping (see [polish](14-polish.md)).
+bias stays; the contact is real geometry and is left as it is. A raised standing pose for the
+hind legs was measured too (femur −0.03 to −0.1 rad, tibia +0.1 to +0.2, and both): none clears
+the contact (39–40 of 40 ticks touching in every case) and each lowers the body by 0.002–0.011
+with no change in the hind claw height, so the standing pose stays as the model gives it.
 
 Every level is brain-tick state, so a slow device still feeds the same world to the same brain.
 
@@ -133,11 +135,19 @@ Every level is brain-tick state, so a slow device still feeds the same world to 
 Supplied, and not claims about the fly: a tripod stepping cycle at 2.2 Hz with the body carried
 at 0.22 cm/s (0.13 backward) 0.006 cm above its stance, the 24 Hz wingbeat, airspeed, cruise
 height, bank, the leg tuck, wall avoidance, and the landing approach. In the stepping cycle each
-foot lifts through its swing half while its fore-aft joint carries it forward, and is planted
-through its stance half while that joint carries it back, so stance feet stay put under the
-moving body instead of sliding. The fore-aft joints were measured on a lifted foot: coxa twist
-for the front and middle legs (±0.3 rad moves the foot 0.014–0.05 fore-aft), femur twist with
-the opposite sign for the hind legs.
+foot lifts through its swing half while its fore-aft joint carries it forward on a cosine, and
+is planted through its stance half while that joint carries it back *linearly* at the body's
+speed, so stance feet stay put under the moving body instead of sliding. The fore-aft joints
+are coxa twist for the front and middle legs and femur twist (opposite sign) for the hind legs.
+Each leg's stride amplitude is derived from its own foot travel per radian (`WALK.cmPerRad`,
+0.076 / 0.148 / 0.077 cm per rad for T1 / T2 / T3), calibrated with the foot planted so the
+servo's lag under load is included: measured along-heading slip per stance is within 0.003 cm
+for every leg (the six-leg mean cancels the real brain's steering wander). What remains is the
+arc of a single twist joint, a sideways component of 0.01 (T2) to 0.06 cm (T1, T3) per stance,
+which one joint per leg cannot straighten. A walking bout ends where the feet are: the stride
+blends out over 0.15 s while the body sinks its 0.006 lift, and the root is handed back as soon
+as the legs carry the weight — no landing crouch (measured: on the ground 0.15 s after the
+bout, no dip below the standing height).
 
 **Grooming** is a further command mapping: DNg11 (`dn_groom`) is the identified antennal-grooming
 descending neuron and rises under touch (22.9 → 33.8 Hz). When its 200 ms mean exceeds 1.35 ×

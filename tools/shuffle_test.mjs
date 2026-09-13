@@ -78,6 +78,18 @@ assert(maxRotation < 0.25, 'no sustained turning');
 // All stimulus combinations must remain physically bounded; the feeding reflex must survive.
 assert.equal(brain.sugarFeedSpikes, 0, 'resting activity never advances the artwork counter');
 const rawBeforeSugar = brain.feedSpikes;
+// The proboscis follows a low-passed servo target: at a partial sugar level (where the 25 ms
+// rate estimate flickers most) it holds a steady extension instead of buzzing. Without the
+// low-pass the haustellum peaks above 70 rad/s and averages ~20 rad/s here.
+brain.setStim('sweet', 0.6);
+advance(0.5);
+const hauJoint = mujoco.mj_name2id(model, 3, 'haustellum'), hauDof = model.jnt_dofadr[hauJoint], hauAdr = model.jnt_qposadr[hauJoint];
+let hauPeak = 0, hauVel = 0, hauSum = 0;
+for (let i = 0; i < 20000; i++) { c.stepSimulation(); const v = Math.abs(data.qvel[hauDof]); hauPeak = Math.max(hauPeak, v); hauVel += v / 20000; hauSum += data.qpos[hauAdr] / 20000; }
+console.log('proboscis under sugar', { peakVel: hauPeak.toFixed(2), meanVel: hauVel.toFixed(2), mean: hauSum.toFixed(3), rest: model.qpos0[hauAdr].toFixed(3) });
+assert(hauPeak < 10, `haustellum moves without jitter (peak ${hauPeak.toFixed(1)} rad/s)`);
+assert(hauVel < 4, `haustellum holds steady (mean ${hauVel.toFixed(1)} rad/s)`);
+assert(Math.abs(hauSum - model.qpos0[hauAdr]) > 0.3, 'the haustellum is held extended under sugar');
 brain.setStim('sweet', 1);
 advance(1);
 assert(brain.sugarFeedSpikes > 0, 'sugar advances the artwork counter');
