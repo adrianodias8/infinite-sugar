@@ -274,6 +274,7 @@ async function loadProps(scene: THREE.Scene, flyBox: THREE.Box3) {
 let ball: BallState | null = null;
 let ballWorld: CANNON.World | null = null;
 const ballTilt = { phase: 0 };
+const viewOccluders: THREE.Mesh[] = [];   // the terrarium's opaque meshes, for the camera's line of sight
 const _ray = new THREE.Raycaster();      // still used once at load, to find the "hilltop" start
 const _down = new THREE.Vector3(0, 0, -1);
 function groundUnder(meshes: THREE.Object3D[], x: number, y: number) {
@@ -1500,7 +1501,38 @@ function stepSimulation() {
     function stepFollow(dt: number) {
       followDelta.copy(followTarget()).sub(controls.target).multiplyScalar(1 - Math.exp(-dt / 0.25));
       if (followDelta.lengthSq() > 1e-10) controls.target.add(followDelta);
+      stepOcclusion(dt);
     }
+    // A spectator that knows where to stand: when the terrarium hides the fly (one raycast
+    // from the thorax to the camera, every sixth frame), the camera slides along its orbit
+    // about the fly, toward the nearest angle with a clear view, at a bounded rate. It never
+    // moves otherwise, and a drag still wins (the user's own orbit is the starting point).
+    const occ = { frame: 0, blocked: false, goal: 0, frames: 0, blockedFrames: 0, ray: new THREE.Raycaster(), dir: new THREE.Vector3(), off: new THREE.Vector3(), cand: new THREE.Vector3() };
+    function viewBlocked(from: THREE.Vector3, to: THREE.Vector3) {
+      if (!viewOccluders.length) return false;
+      occ.dir.copy(to).sub(from); const dist = occ.dir.length();
+      if (dist < 0.05) return false;
+      occ.ray.set(from, occ.dir.multiplyScalar(1 / dist)); occ.ray.near = 0.02; occ.ray.far = dist - 0.02;
+      return occ.ray.intersectObjects(viewOccluders, false).length > 0;
+    }
+    function stepOcclusion(dt: number) {
+      if (occ.goal !== 0) {
+        const step = Math.sign(occ.goal) * Math.min(Math.abs(occ.goal), 1.5 * dt);
+        occ.off.copy(camera.position).sub(controls.target).applyAxisAngle(_up, step);
+        camera.position.copy(controls.target).add(occ.off); occ.goal -= step;
+        return;
+      }
+      if (++occ.frame % 6 !== 0) return;
+      occ.frames++;
+      occ.blocked = viewBlocked(controls.target, camera.position);
+      if (!occ.blocked) return;
+      occ.blockedFrames++;
+      for (let k = 1; k <= 8; k++) for (const sign of [1, -1]) {
+        occ.cand.copy(camera.position).sub(controls.target).applyAxisAngle(_up, sign * k * 0.2).add(controls.target);
+        if (!viewBlocked(controls.target, occ.cand)) { occ.goal = sign * k * 0.2; return; }
+      }
+    }
+    const _up = new THREE.Vector3(0, 0, 1);
 
     const hemi = new THREE.HemisphereLight(0x9fc4ff, 0x1a2028, 1.15);
     scene.add(hemi);
@@ -1638,6 +1670,7 @@ function stepSimulation() {
         }
       }
       solidMeshes.push(...sackMeshes);   // solid for the ball, after the sack has found its spot
+      viewOccluders.push(...solidMeshes);
       if (hillMeshes.length) {
         loadBall(scene, flyBox, hillMeshes, glassMeshes, solidMeshes).catch(err => console.warn('loadBall failed', err));
       }
@@ -1726,6 +1759,41 @@ function stepSimulation() {
       if (scene.fog instanceof THREE.Fog) scene.fog.color.setRGB((0.80 + 0.12 * u) * day, (0.92 + 0.06 * u) * day, (0.94 + 0.04 * u) * day);
     }
 
+    // ---- sound: a wingbeat tone while the wings stroke and a soft tick as each tripod lands,
+    // both synthesised and driven by the same state that draws them (flight.flap, the stride
+    // phase). Muted by default; the AudioContext is created on the first press of the button.
+    const sound = { on: false, ctx: null as AudioContext | null, gain: null as GainNode | null, osc: null as OscillatorNode | null, stance: -1 };
+    function soundStart() {
+      const ctx = new AudioContext();
+      const gain = ctx.createGain(); gain.gain.value = 0; gain.connect(ctx.destination);
+      const osc = ctx.createOscillator(); osc.type = 'triangle'; osc.frequency.value = 190; osc.connect(gain); osc.start();
+      const osc2 = ctx.createOscillator(); osc2.type = 'sine'; osc2.frequency.value = 475; const g2 = ctx.createGain(); g2.gain.value = 0.35; osc2.connect(g2); g2.connect(gain); osc2.start();
+      sound.ctx = ctx; sound.gain = gain; sound.osc = osc;
+    }
+    function stepSound() {
+      if (!sound.on || !sound.ctx || !sound.gain || !sound.osc) return;
+      const ctx = sound.ctx, now = ctx.currentTime;
+      const airborne = flight.state === 'takeoff' || flight.state === 'flight' || flight.state === 'landing';
+      sound.gain.gain.setTargetAtTime(airborne ? 0.06 * flight.flap : 0, now, 0.05);
+      sound.osc.frequency.setTargetAtTime(190 + 25 * flight.asym, now, 0.1);
+      const stance = flight.state === 'walk' ? Math.floor(flight.walk.phase / Math.PI) : -1;   // a tripod lands every half cycle
+      if (stance !== sound.stance) {
+        if (stance >= 0 && sound.stance >= 0) {
+          const tick = ctx.createOscillator(), tg = ctx.createGain();
+          tick.type = 'sine'; tick.frequency.value = 1400 + 300 * (stance % 2);
+          tg.gain.setValueAtTime(0.035, now); tg.gain.exponentialRampToValueAtTime(0.0005, now + 0.03);
+          tick.connect(tg); tg.connect(ctx.destination); tick.start(now); tick.stop(now + 0.035);
+        }
+        sound.stance = stance;
+      }
+    }
+    $('b_sound').onclick = (e) => {
+      sound.on = !sound.on;
+      if (sound.on && !sound.ctx) soundStart();
+      if (sound.ctx) { if (sound.on) sound.ctx.resume(); else sound.ctx.suspend(); }
+      if (e.currentTarget instanceof HTMLElement) { e.currentTarget.classList.toggle('on', sound.on); e.currentTarget.setAttribute('aria-pressed', String(sound.on)); e.currentTarget.title = sound.on ? 'Mute' : 'Sound: wingbeat and footsteps'; }
+    };
+
     // ---- the sack shows how much sugar is left: it slumps to half height as it empties
     const sackScale = { z: -1 };
     function stepSack() {
@@ -1733,6 +1801,34 @@ function stepSimulation() {
       if (!sack) return;
       if (sackScale.z < 0) sackScale.z = sack.scale.z;
       sack.scale.z = sackScale.z * (0.5 + 0.5 * world.sugar.amount);
+    }
+
+    const SENSE_ROWS: [string, () => number][] = [
+      ['sweet', () => brain.rate.grn_sweet], ['bitter', () => brain.rate.grn_bitter], ['odour', () => brain.rate.orn],
+      ['touch', () => brain.rate.mechano], ['heat', () => brain.rate.thermo_hot], ['cool', () => brain.rate.thermo_cold],
+      ['damp', () => brain.rate.hygro], ['light', () => brain.rate.visual], ['looming', () => (brain.rate.lc4 + brain.rate.lplc2) / 2],
+      ['object', () => brain.rate.lc11]];
+
+    // ---- the status pill: a sentence from the state the fly is in and what the world offers
+    function statusSentence() {
+      const W = world.enabled, wl = world.levels, S = flight.state;
+      const towardSugar = W && world.sugar.placed && world.sugarDist < 1.0 && Math.abs(bearingTo(data, world.sugar.x, world.sugar.y)) < 0.6;
+      if (S === 'walk' || (S === 'touchdown' && flight.flap === 0 && flight.fold === 0)) {
+        if (flight.walk.turning) return 'Turning at an obstacle';
+        if (flight.walk.dir < 0) return 'Walking backward';
+        return towardSugar && wl.odour > 0 ? 'Walking toward the sugar' : 'Walking';
+      }
+      if (S === 'takeoff') return 'Taking off';
+      if (S === 'flight') return flight.escape > FLIGHT.quietRate ? 'Flying from a threat' : 'Flying';
+      if (S !== 'ground') return 'Landing';
+      if (W && wl.sweet > 0) return world.sugar.amount < 0.05 ? 'At an empty sack' : 'Feeding at the sack';
+      if (brain.sugar > 0) return 'Feeding';
+      if (W && wl.bitter > 0) return 'Tasting a plant';
+      if (W && wl.sweetLeg > 0) return 'Standing in the sugar';
+      if (groom.active) return 'Grooming the antennae';
+      if (W && wl.touch > 0) return 'Bumped by the ball';
+      if (W && wl.odour > 0.3) return 'Smelling the sugar';
+      return '';
     }
 
     // ---- looming object: the visible cause of the escape response
@@ -1768,6 +1864,7 @@ function stepSimulation() {
     const meshGeom = new Map(geomNodes.map(g => [g.mesh, g.gi]));
     const tapRay = new THREE.Raycaster();
     const ripples: { sprite: THREE.Sprite, t: number }[] = [];
+    const ripplePool: THREE.Sprite[] = [];
     const rippleTexture = (() => {
       const N = 64, cv = document.createElement('canvas');
       cv.width = cv.height = N;
@@ -1790,8 +1887,9 @@ function stepSimulation() {
       const yaw = yawOf(data.qpos.subarray(3, 7));
       const ly = -(hit.point.x - data.qpos[0]) * Math.sin(yaw) + (hit.point.y - data.qpos[1]) * Math.cos(yaw);
       pokeBody(model.geom_bodyid[gi], ly > 0.01 ? 1 : ly < -0.01 ? -1 : 0);
-      const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: rippleTexture, transparent: true, depthTest: false, depthWrite: false }));
-      sprite.position.copy(hit.point); sprite.renderOrder = 10;
+      // sprites are pooled: a tap reuses a finished ripple's sprite rather than allocating one
+      const sprite = ripplePool.pop() || new THREE.Sprite(new THREE.SpriteMaterial({ map: rippleTexture, transparent: true, depthTest: false, depthWrite: false }));
+      sprite.position.copy(hit.point); sprite.renderOrder = 10; sprite.visible = true;
       scene.add(sprite); ripples.push({ sprite, t: 0 });
       return poke.last;
     }
@@ -1802,7 +1900,7 @@ function stepSimulation() {
         const u = Math.min(1, r.t / 0.45);
         r.sprite.scale.setScalar(rippleSize * (0.5 + 1.8 * u));
         r.sprite.material.opacity = 1 - u;
-        if (u >= 1) { scene.remove(r.sprite); r.sprite.material.dispose(); ripples.splice(i, 1); }
+        if (u >= 1) { scene.remove(r.sprite); r.sprite.visible = false; ripplePool.push(r.sprite); ripples.splice(i, 1); }
       }
     }
     const tap = { x:0, y:0, t:0, id:-1 };
@@ -1905,16 +2003,12 @@ function stepSimulation() {
         $('s_time').textContent = data.time.toFixed(2) + ' s';
         $('s_bms').textContent  = ((brain.ms - sim.brainStartMs) / 1000).toFixed(2) + ' s';
         $('s_pop').textContent  = brain.popRate.toFixed(1) + ' Hz';
-        $('s_grn').textContent  = brain.rate.grn_sweet.toFixed(0) + ' Hz';
-        $('s_bitter').textContent = brain.rate.grn_bitter.toFixed(0) + ' Hz';
-        $('s_orn').textContent  = brain.rate.orn.toFixed(0) + ' Hz';
-        $('s_mech').textContent = brain.rate.mechano.toFixed(0) + ' Hz';
-        $('s_hot').textContent  = brain.rate.thermo_hot.toFixed(0) + ' Hz';
-        $('s_cold').textContent = brain.rate.thermo_cold.toFixed(0) + ' Hz';
-        $('s_hygro').textContent = brain.rate.hygro.toFixed(0) + ' Hz';
-        $('s_vis').textContent  = brain.rate.visual.toFixed(0) + ' Hz';
-        $('s_loom').textContent = ((brain.rate.lc4 + brain.rate.lplc2) / 2).toFixed(0) + ' Hz';
-        $('s_lc11').textContent = brain.rate.lc11.toFixed(0) + ' Hz';
+        for (const [k, rate] of SENSE_ROWS) {   // the loop: world -> switch -> neurons
+          const wl = (world.levels as Record<string, number>)[k];
+          $('w_' + k).textContent = world.enabled && wl !== undefined ? wl.toFixed(2) : '–';
+          $('x_' + k).textContent = (stimSwitch[k] || 0) > 0 ? (stimSwitch[k] || 0).toFixed(2) : k === 'touch' && stimPulse.touch[0] + stimPulse.touch[1] > 0 ? 'tap' : k === 'looming' && loom.active ? 'loom' : '–';
+          $('s_' + k).textContent = rate().toFixed(0) + ' Hz';
+        }
         $('s_mnp').textContent  = brain.rate.mn_proboscis.toFixed(1) + ' Hz';
         $('s_mni').textContent  = brain.rate.mn_ingestion.toFixed(1) + ' Hz';
         $('s_neck').textContent = ((brain.rate.mn_neck_l + brain.rate.mn_neck_r) / 2).toFixed(1) + ' Hz';
@@ -1938,19 +2032,13 @@ function stepSimulation() {
 
       if (!sim.paused) stepBall(wall);
       stepSack();
+      stepSound();
       stepRipples(wall);
       stepLighting(wall);
       stepLoomDisc();
       if (loom.active !== loomShown) { loomShown = loom.active; syncStimUI(); }
       stepFollow(wall);
-      const doing = flight.state === 'walk' ? 'Walking'
-                  : flight.state === 'takeoff' || flight.state === 'flight' ? 'In flight'
-                  : flight.state === 'touchdown' && flight.flap === 0 && flight.fold === 0 ? 'Walking'
-                  : flight.state !== 'ground' ? 'Landing'
-                  : world.enabled && world.levels.sweet > 0 ? 'Feeding'
-                  : world.enabled && world.levels.bitter > 0 ? 'Tasting a plant'
-                  : world.enabled && world.levels.sweetLeg > 0 ? 'Tasting with the feet'
-                  : flight.state === 'ground' && groom.active ? 'Grooming' : '';
+      const doing = statusSentence();
       if (doing !== flightShown) {
         flightShown = doing;
         $('flight-state').hidden = doing === '';
@@ -1982,6 +2070,7 @@ function stepSimulation() {
                    world, WORLD, walkable, nearestWalkable, plantAt, stimWorld, stepWorld, groom, GROOM,
                    sync: () => syncGeoms(model, data),
                    stepBall, get ball() { return ball; }, get ballWorld() { return ballWorld; },
+                   occlusion: occ, statusSentence, sound,
                    dbg: () => ({ paused: sim.paused, acc, steps: sim.steps, time: data.time,
                                  nodes: geomNodes.length,
                                  brainMs: brain.ms, sugar: brain.sugar,

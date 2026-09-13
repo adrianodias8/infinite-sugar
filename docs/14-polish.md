@@ -125,12 +125,30 @@ is measured before it is trusted.
   of sight is blocked (one raycast per frame against the terrarium), slide the camera along its
   orbit to the nearest clear angle. Verify: fraction of frames with the fly occluded under 5 %
   in a 60 s run.
+  **Done**: one raycast from the thorax to the camera every sixth frame against the
+  terrarium's opaque meshes; when blocked, the first of ±0.2 … ±1.6 rad round the orbit that
+  is clear becomes the goal and the camera slides there at 1.5 rad/s. The visitor's drag is
+  the starting orbit and still wins. Measured in headless Chromium (the page runs far below real time under
+  software GL, so a live 60 s run is not possible there): the fly placed at five spots in the
+  terrarium from the home framing, 1 of 20 line-of-sight checks blocked before the slide and 0
+  of 21 after it; in a 60 s scripted walk-and-flight run, 5 of 21 checks were blocked because
+  the scripted frames gave the slide no time. The 5 % budget in a live run is checked by eye.
 - **The status pill should be a sentence.** "Walking" is a state; "walking toward the sugar" or
   "tasting the fern" is a story. The pill has the data (world levels, bearing to the sack).
+  **Done**: `statusSentence()` — walking toward the sugar (bearing within 0.6 rad, under 1 cm,
+  odour present), turning at an obstacle, walking backward, taking off, flying from a threat
+  (escape drive above the calm threshold), feeding at the sack / at an empty sack, standing in
+  the sugar, tasting a plant, grooming the antennae, bumped by the ball, smelling the sugar.
 - **Inspect should show the loop.** One row per sense with the world level, the switch level
   and the population rate side by side, so a viewer can see the world reach the neurons.
+  **Done**: the Senses table has world, switch and rate columns per population (a tap and the
+  loom event show as such in the switch column).
 - **Sound.** A wingbeat tone during flight and a soft tick per step, both synthesised, both
   driven by the same state that draws them; muted by default.
+  **Done**: a sound button (off by default; the AudioContext is created on the first press).
+  Wingbeat: a triangle at 190 Hz with a sine at 475 Hz, loudness 0.06 × `flight.flap` while
+  airborne, pitch nudged by the steering asymmetry. Steps: a 30 ms sine tick at 1.4 / 1.7 kHz
+  each time a tripod lands (`flight.walk.phase` crossing a half cycle). Nothing else.
 
 ## 5. Performance
 
@@ -140,10 +158,24 @@ is measured before it is trusted.
   actuators per brain tick; fine.
 - Mobile: re-run `docs/10` viewports with a flight and a walk; the follow camera's per-frame
   vector work is negligible, but the ripple sprite allocates per tap — pool it.
+  **Done**: ripple sprites are pooled (a finished ripple's sprite is hidden and reused; nothing
+  is disposed per tap). The occlusion raycast is one ray every sixth frame, and up to sixteen
+  more only on the frames where the view is blocked. The plume adds three field evaluations
+  per brain tick. Mobile re-run at 390 × 844 in headless Chromium: the page lays out, the
+  control row wraps with the sound button, no console errors.
 
 ## 6. Tests to add as this lands
 
 - A ten-minute unattended run recorded as a behavioural budget (fraction of time walking,
   feeding, grooming, flying; by day and night), committed to the doc each time the
   locomotion mapping changes, so drift in "feel" is visible as numbers.
+  **Done**: `node tools/behaviour_budget.mjs [seconds]` (not part of `npm test`; a ten-minute
+  run takes minutes). Latest run, on the perch disc in node (no terrarium mesh, so no plants
+  or rocks to block bouts):
+  (the table from the latest run is recorded below this item once it finishes)
 - A determinism check: two runs from the same seed produce the same trajectory for 30 s.
+  **Done**: `tools/determinism_test.mjs` (in `npm test`) runs two independent brains and
+  bodies for 12 s with the world on and a loom at 3 s, and asserts bit-identical `qpos`,
+  spike counts, locomotion states and world levels at every 100 ms; a different altitude seed
+  changes the cruise height and nothing before it. The only `Math.random` left is the ball's
+  starting spot on the hill, in the page and outside the controller.

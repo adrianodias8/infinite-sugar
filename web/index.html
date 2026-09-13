@@ -63,6 +63,9 @@
       <button id="b_home" class="icon-button" aria-label="Return to the fly" title="Return to the fly">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4H4v4m12-4h4v4M4 16v4h4m12-4v4h-4"/><circle cx="12" cy="12" r="3"/></svg>
       </button>
+      <button id="b_sound" class="icon-button sound-button" aria-label="Sound" aria-pressed="false" title="Sound: wingbeat and footsteps">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9v6h4l5 4V5L8 9H4Z"/><path class="sound-wave" d="M16 9a4 4 0 0 1 0 6"/><path class="sound-wave" d="M18.5 6.5a7.5 7.5 0 0 1 0 11"/></svg>
+      </button>
       <button id="b_world" class="stim-button on" aria-pressed="true" title="The terrarium supplies the senses: sugar at the sack, odour, daylight, moving objects">World</button>
       <button id="b_sugar" class="sugar-button" data-stim="sweet" aria-pressed="false" title="Override: infinite sugar wherever the fly is"><span class="sugar-dot" aria-hidden="true"></span><span id="sugar-label">Sugar off</span></button>
       <span id="flight-state" class="flight-state" role="status" hidden>In flight</span>
@@ -144,16 +147,17 @@
   </table>
 </section>
     <section aria-labelledby="senses-details-title"><h3 id="senses-details-title">Senses</h3>  <table id="senses">
-    <tr data-stim="sweet"><td>sweet GRN</td><td id="s_grn">–</td></tr>
-    <tr data-stim="bitter"><td>bitter GRN</td><td id="s_bitter">–</td></tr>
-    <tr data-stim="odour"><td>olfactory RN</td><td id="s_orn">–</td></tr>
-    <tr data-stim="touch"><td>mechanosensory</td><td id="s_mech">–</td></tr>
-    <tr data-stim="heat"><td>thermo hot cells</td><td id="s_hot">–</td></tr>
-    <tr data-stim="cool"><td>thermo cold cells</td><td id="s_cold">–</td></tr>
-    <tr data-stim="damp"><td>hygrosensory</td><td id="s_hygro">–</td></tr>
-    <tr data-stim="light"><td>visual</td><td id="s_vis">–</td></tr>
-    <tr data-stim="looming"><td>looming LC4/LPLC2</td><td id="s_loom">–</td></tr>
-    <tr data-stim="object"><td>small object LC11</td><td id="s_lc11">–</td></tr>
+    <tr class="senses-head"><th scope="col">population</th><th scope="col">world</th><th scope="col">switch</th><th scope="col">rate</th></tr>
+    <tr data-stim="sweet"><td>sweet GRN</td><td id="w_sweet">–</td><td id="x_sweet">–</td><td id="s_sweet">–</td></tr>
+    <tr data-stim="bitter"><td>bitter GRN</td><td id="w_bitter">–</td><td id="x_bitter">–</td><td id="s_bitter">–</td></tr>
+    <tr data-stim="odour"><td>olfactory RN</td><td id="w_odour">–</td><td id="x_odour">–</td><td id="s_odour">–</td></tr>
+    <tr data-stim="touch"><td>mechanosensory</td><td id="w_touch">–</td><td id="x_touch">–</td><td id="s_touch">–</td></tr>
+    <tr data-stim="heat"><td>thermo hot cells</td><td id="w_heat">–</td><td id="x_heat">–</td><td id="s_heat">–</td></tr>
+    <tr data-stim="cool"><td>thermo cold cells</td><td id="w_cool">–</td><td id="x_cool">–</td><td id="s_cool">–</td></tr>
+    <tr data-stim="damp"><td>hygrosensory</td><td id="w_damp">–</td><td id="x_damp">–</td><td id="s_damp">–</td></tr>
+    <tr data-stim="light"><td>visual</td><td id="w_light">–</td><td id="x_light">–</td><td id="s_light">–</td></tr>
+    <tr data-stim="looming"><td>looming LC4/LPLC2</td><td id="w_looming">–</td><td id="x_looming">–</td><td id="s_looming">–</td></tr>
+    <tr data-stim="object"><td>small object LC11</td><td id="w_object">–</td><td id="x_object">–</td><td id="s_object">–</td></tr>
   </table>
 </section>
     <section aria-labelledby="simulation-details-title"><h3 id="simulation-details-title">Simulation</h3>  <table>
