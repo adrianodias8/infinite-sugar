@@ -31,8 +31,17 @@ def run(ms, stim, seed=1, warm=400, gain=1.0):
                 inhq[(s+ID)%(ID+1)]+=np.bincount(tg[~e],ww[~e],minlength=N).astype(np.float32)
     return cnt/(ms/1000.0)
 
-OUTS=["mn_proboscis","mn_neck","mn_antenna","dn_gf","dn_escwing","dn_steer","dn_walk","dn_groom","pam"]
-INS=[("(none)",[]),("sweet",["grn_sweet","grn_sweet_leg"]),("bitter",["grn_bitter"]),
+import sys
+if "--lateral" in sys.argv:
+    # Does a one-sided input give a one-sided output? Drive the LEFT half of a sensory
+    # population alone and read the side-split motor and descending pools.
+    OUTS=["mn_neck_l","mn_neck_r","mn_antenna_l","mn_antenna_r","dn_steer_l","dn_steer_r","dn_escwing_l","dn_escwing_r","dn_walk","dn_back"]
+    INS=[("(none)",[]),("odour L",["orn_l"]),("odour both",["orn"]),("touch L",["mechano_l"]),("touch both",["mechano"]),
+         ("loom L",["lc4_l","lplc2_l"]),("loom both",["lc4","lplc2"]),("light L",["visual_l"]),("sweet L",["grn_sweet_l"])]
+else:
+    OUTS=["mn_proboscis","mn_neck","mn_antenna","dn_gf","dn_escwing","dn_steer","dn_walk","dn_groom","pam"]
+if "--lateral" not in sys.argv:
+  INS=[("(none)",[]),("sweet",["grn_sweet","grn_sweet_leg"]),("bitter",["grn_bitter"]),
      ("odour",["orn"]),("touch",["mechano"]),("thermo",["thermo"]),
      ("heat 1x",["thermo_hot"]),("heat 2.5x",["thermo_hot"],2.5),   # hot cells are tonically inhibited; see brain.ts stimGain
      ("cold",["thermo_cold"]),("cool",["thermo_cold","hygro_cool"]),

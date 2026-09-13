@@ -33,10 +33,11 @@ const start = app.indexOf('// --------------------------------------------------
 const end = app.indexOf('// ---------------------------------------------------------------- main', start);
 assert(start >= 0 && end > start, 'controller section must exist');
 vm.runInContext(app.slice(start, end) + `
-globalThis.controller = { resetSim, buildDriveMap, buildShuffleMap, buildFlightMap, stepSimulation, stepFlight,
-  flight, FLIGHT, shuffle, stimPulse, get wings() { return wingJoints; } };`, context);
+globalThis.controller = { resetSim, buildDriveMap, buildShuffleMap, buildFlightMap, buildWorldMap, stepSimulation, stepFlight,
+  flight, FLIGHT, WALK, shuffle, stimPulse, world, walkable, get wings() { return wingJoints; } };`, context);
 const c = context.controller;
-c.resetSim(); c.buildDriveMap(model, brain); c.buildShuffleMap(); c.buildFlightMap();
+c.resetSim(); c.buildDriveMap(model, brain); c.buildShuffleMap(); c.buildFlightMap(); c.buildWorldMap();
+c.world.enabled = false;   // the senses here are scripted; tools/world_test.mjs covers the world
 const f = c.flight, F = c.FLIGHT;
 
 function advance(seconds) { for (let i = 0; i < Math.round(seconds * 10000); i++) c.stepSimulation(); }
@@ -44,9 +45,12 @@ function finite() { assert(Array.from(data.qpos).every(Number.isFinite), 'finite
 const yawJoint = mujoco.mj_name2id(model, 3, 'wing_yaw_left');
 const yawAdr = model.jnt_qposadr[yawJoint];
 
-// 1. Rest: nothing launches the fly.
+// 1. Rest: nothing launches the fly. (Walking bouts from DNp09 are possible at rest; hold them
+// off for the flight checks and exercise them separately below.)
+f.enabled = false;
 advance(1.5);
 const standZ = data.qpos[2];
+f.enabled = true;
 assert.equal(f.state, 'ground');
 assert(f.escape < 5, 'escape DNs silent at rest');
 
@@ -71,28 +75,63 @@ const dyaw = Math.atan2(Math.sin(f.yaw - yaw0), Math.cos(f.yaw - yaw0));
 console.log('in flight', { takeoffAt, z: data.qpos[2].toFixed(3), asym: (asymSum / n).toFixed(2), dyaw: dyaw.toFixed(2), escape: f.escape.toFixed(0) });
 if (Math.abs(asymSum / n) > 0.1) assert(Math.sign(dyaw) === Math.sign(asymSum / n), 'turns toward the stronger steering DN');
 
-// 3. Threat gone: the escape DNs fall silent and the fly returns to its perch.
+// 3. Threat gone: the escape DNs fall silent and the fly lands where it is, on walkable floor.
 brain.setStim('looming', 0);
 let landedAt = -1;
 for (let t = 0; t < 2500 && landedAt < 0; t++) { advance(0.01); if (f.state === 'ground') landedAt = t * 0.01; }
 assert(landedAt >= 0, 'lands within 25 s of the threat passing');
 finite();
 const home = f.home;
-assert(Math.hypot(data.qpos[0] - home.x, data.qpos[1] - home.y) < 0.03, 'lands on the perch');
+console.log('landing spot', { at: [data.qpos[0].toFixed(3), data.qpos[1].toFixed(3)], home: [home.x.toFixed(3), home.y.toFixed(3)], r: Math.hypot(data.qpos[0], data.qpos[1]).toFixed(3), state: f.state });
+assert(Math.hypot(data.qpos[0] - home.x, data.qpos[1] - home.y) < 0.03, 'lands on its chosen spot');
+assert(c.walkable(data.qpos[0], data.qpos[1]), 'the spot is walkable floor');
+f.enabled = false;   // no walking bouts while the stance is checked
 advance(1.5);
 finite();
 const heading = Math.atan2(2 * (data.qpos[3] * data.qpos[6] + data.qpos[4] * data.qpos[5]), 1 - 2 * (data.qpos[5] ** 2 + data.qpos[6] ** 2));
 // The root and legs must be still; the head and proboscis keep their own neural jitter.
 const rootVel = Math.max(...Array.from(data.qvel.subarray(0, 6), Math.abs));
 const wingRest = ['wing_yaw_left', 'wing_yaw_right'].map(n => data.qpos[model.jnt_qposadr[mujoco.mj_name2id(model, 3, n)]]);
-console.log('landed', { landedAt, z: data.qpos[2].toFixed(3), standZ: standZ.toFixed(3), heading: heading.toFixed(2), rootVel: rootVel.toFixed(3), wingYaw: wingRest.map(v => v.toFixed(2)) });
+console.log('landed', { landedAt, at: [data.qpos[0].toFixed(2), data.qpos[1].toFixed(2)], z: data.qpos[2].toFixed(3), standZ: standZ.toFixed(3), heading: heading.toFixed(2), rootVel: rootVel.toFixed(3), wingYaw: wingRest.map(v => v.toFixed(2)) });
 assert(Math.abs(data.qpos[2] - standZ) < 0.02, 'standing height restored');
-assert(Math.abs(Math.atan2(Math.sin(heading - home.yaw), Math.cos(heading - home.yaw))) < 0.15, 'heading restored');
+assert(Math.abs(Math.atan2(Math.sin(heading - home.yaw), Math.cos(heading - home.yaw))) < 0.15, 'heading kept from the approach');
 assert(rootVel < 0.5, 'root settled, not tumbling');
 assert(wingRest.every(v => v > 0.6), 'wings fold back under neural control after landing');
 const shuffles = c.shuffle.count;
 advance(3);
 assert(c.shuffle.count > shuffles, 'foot shuffle resumes after landing');
+f.enabled = true;
+
+// 3b. Walking: DNp09 spikes request forward bouts, MDN spikes backward ones; steering turns;
+// the fly stops at the edge of the walkable floor and hands the root back standing.
+const stepper = (fwd, back, l, r) => ({ rate: { dn_escwing_l:0, dn_escwing_r:0, dn_steer_l:l, dn_steer_r:r }, rest: { dn_steer_l:70, dn_steer_r:53 }, spikesOf: role => role === 'dn_walk' ? fwd : role === 'dn_back' ? back : 0 });
+c.resetSim(); advance(0.5);                                   // at the origin, heading +x, on the fallback disc
+const x0 = data.qpos[0], y0 = data.qpos[1], yawA = 0;
+c.stepFlight(stepper(1, 0, 70, 53), data, 0.001);          // one DNp09 spike
+assert.equal(f.state, 'walk', 'a DNp09 spike starts a walking bout');
+assert(f.walk.bout > 0.5 && f.walk.bout <= c.WALK.boutMax);
+f.enabled = false;                                            // no further requests from the real brain while this bout is measured
+advance(0.4);                                                 // the real brain steers; its calibrated rest reads as straight
+const walked = (data.qpos[0] - x0) * Math.cos(yawA) + (data.qpos[1] - y0) * Math.sin(yawA);
+console.log('walk', { state: f.state, walked: walked.toFixed(3), bouts: f.walk.count, z: data.qpos[2].toFixed(3) });
+assert(walked > 0.04, 'walks forward along its heading');
+assert(Math.abs(f.yawRate) < 0.8, 'steering at the calibrated rest wanders rather than circles');
+for (let t = 0; t < 400 && f.state !== 'ground'; t++) advance(0.01);
+assert.equal(f.state, 'ground', 'the bout ends on the ground');
+assert(Math.abs(data.qpos[2] - standZ) < 0.02, 'standing height after walking');
+f.enabled = true;
+// backward and turning
+c.stepFlight(stepper(0, 1, 105, 53), data, 0.001);
+assert.equal(f.state, 'walk'); assert.equal(f.walk.dir, -1, 'an MDN spike walks backward');
+for (let i = 0; i < 400; i++) c.stepFlight(stepper(0, 0, 105, 53), data, 0.001);
+assert(f.yawRate > 0.3, 'a stronger left steering DN turns left');
+// the edge of the floor stops a bout
+f.state = 'ground'; f.walk.bout = 0;
+f.walk.bout = 1; f.walk.dir = 1; f.state = 'walk'; f.x = 0.58; f.y = 0; f.yaw = 0; f.standZ = standZ;   // fallback disc edge (no ground map here)
+const blocked = f.walk.blocked;
+for (let i = 0; i < 300; i++) c.stepFlight(stepper(0, 0, 70, 53), data, 0.001);
+assert(f.walk.blocked > blocked && f.x < 0.6 && Math.abs(f.yaw) > 0.2, 'turns at the edge of the walkable floor instead of leaving it');
+f.state = 'ground'; f.walk.bout = 0; c.resetSim(); f.enabled = true;
 
 // 4. Pure controller checks with a scripted brain: bounds and the disable switch.
 const fake = { rate: { dn_escwing_l:300, dn_escwing_r:300, dn_steer_l:110, dn_steer_r:20 } };
@@ -100,6 +139,10 @@ for (let i = 0; i < 300; i++) c.stepFlight(fake, data, 0.001);
 assert.notEqual(f.state, 'ground', 'scripted escape drive launches');
 for (let i = 0; i < 1000; i++) c.stepFlight(fake, data, 0.001);
 assert(f.asym > 0.9 && f.yawRate > 0, 'full left asymmetry turns left');
+// a threat on the left drives the left escape DN alone (measured); the fly turns away, right
+const leftThreat = { rate: { dn_escwing_l:220, dn_escwing_r:0, dn_steer_l:60, dn_steer_r:60 } };
+for (let i = 0; i < 600; i++) c.stepFlight(leftThreat, data, 0.001);
+assert(f.yawRate < -0.5, 'escape asymmetry turns away from the threat');
 const B = f.bounds;
 f.x = B.cx + B.r - 0.02; f.y = B.cy; f.yaw = 0;               // at the wall, heading out
 let maxR = 0, loomSeen = 0;
@@ -111,4 +154,4 @@ f.enabled = false; f.escape = 0;
 for (let i = 0; i < 1000; i++) c.stepFlight(fake, data, 0.001);
 assert.equal(f.state, 'ground', 'disabled flight never launches');
 f.enabled = true;
-console.log('PASS: escape-circuit takeoff, wingbeat, steering sign, perch landing, shuffle resumes, bounds, wall looming, disable switch');
+console.log('PASS: escape-circuit takeoff, wingbeat, steering sign, landing on walkable floor, shuffle resumes, walking bouts, backward and turning, floor edge, bounds, turn-away, wall looming, disable switch');

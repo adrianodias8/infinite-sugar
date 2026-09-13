@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#151218">
-<meta name="description" content="A fruit fly simulation receiving continuous sugar stimulation.">
+<meta name="description" content="A whole-brain fruit fly simulation living in a terrarium.">
 <meta property="og:title" content="Infinite Sugar">
 <meta property="og:description" content="A fruit fly simulation receiving continuous sugar stimulation.">
 <meta property="og:type" content="website">
@@ -63,7 +63,8 @@
       <button id="b_home" class="icon-button" aria-label="Return to the fly" title="Return to the fly">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4H4v4m12-4h4v4M4 16v4h4m12-4v4h-4"/><circle cx="12" cy="12" r="3"/></svg>
       </button>
-      <button id="b_sugar" class="sugar-button on" data-stim="sweet" aria-pressed="true"><span class="sugar-dot" aria-hidden="true"></span><span id="sugar-label">Sugar on</span></button>
+      <button id="b_world" class="stim-button on" aria-pressed="true" title="The terrarium supplies the senses: sugar at the sack, odour, daylight, moving objects">World</button>
+      <button id="b_sugar" class="sugar-button" data-stim="sweet" aria-pressed="false" title="Override: infinite sugar wherever the fly is"><span class="sugar-dot" aria-hidden="true"></span><span id="sugar-label">Sugar off</span></button>
       <span id="flight-state" class="flight-state" role="status" hidden>In flight</span>
     </div>
     <div class="stim-strip" role="group" aria-label="Environment">
@@ -87,7 +88,8 @@
   <p>We believe this may be of note as a solution to moral philosophy. As technology advances, we may be able to simulate pleasant lives for increasingly complex forms of life.</p>
   <details class="work-notes"><summary>Technical summary</summary>
     <p>Some movements use supplied patterns driven by neural activity. There is no learning or habituation, so there is no mechanism for <span data-fly-name></span> to grow bored of the supply of sugar or its stationary position.</p>
-    <p>The environment strip drives the other sensory populations, and a tap on <span data-fly-name></span> is a brief touch. A looming object fires the real escape circuit, and that circuit launches a flight: the decision to take off, the turning and the decision to land come from identified descending neurons; the wingbeat, airspeed and path are supplied, because the wing motor circuit is not in the brain dataset.</p>
+    <p>The terrarium is <span data-fly-name></span>’s world. A sack of sugar on the floor is tasted only when the mouthparts or feet reach it, and smelled from further away on the antenna facing it; a slow day and night cycle drives the visual, warmth, cold and humidity cells; the beach ball and anything else that approaches is a looming object on the eye it approaches, and a bump is a touch on that flank. Every sense is split by side, as it is in the connectome. The environment strip overrides any of them, and a tap on <span data-fly-name></span> is a brief touch.</p>
+    <p>Where <span data-fly-name></span> goes is decided by identified descending neurons: the forward- and backward-walking neurons request steps, the escape circuit launches a flight, the steering neurons turn, and calm ends a flight wherever it is. The gait, the wingbeat, airspeed and path are supplied, because the leg and wing motor circuits are not in the brain dataset. Measured in the wiring: a threat on the left drives the left escape neuron alone and turns the fly right; an odour on the left turns it left.</p>
     <p>The whole brain emulation uses a simplified leaky integrate-and-fire model of 139,255 neurons and 2,700,513 connections.</p>
     <p>The terrarium provides a scenic environment for <span data-fly-name></span> to enjoy, though it does not directly interact with or observe it per se.</p>
     <p id="neural-map-notes">The neural view samples real FlyWire positions and connections. Blue marks sensory neurons, pink internal neurons, and yellow motor neurons and descending commands. Flashes follow simulated spikes, briefly extended for visibility; a connection lights when its source fires. Lines join representative positions and do not trace the shapes of neurons.</p>
@@ -129,7 +131,16 @@
     <tr><td>grooming DN</td><td id="s_groom">–</td></tr>
     <tr><td>PAM (DA)</td><td id="s_pam">–</td></tr>
     <tr><td>escape drive (100 ms)</td><td id="s_escape">–</td></tr>
-    <tr><td>flight</td><td id="s_flight">–</td></tr>
+    <tr><td>steering L−R (rest-normalised)</td><td id="s_steerside">–</td></tr>
+    <tr><td>locomotion</td><td id="s_flight">–</td></tr>
+  </table>
+</section>
+    <section aria-labelledby="world-details-title"><h3 id="world-details-title">World</h3>  <table>
+    <tr><td>time of day</td><td id="s_day">–</td></tr>
+    <tr><td>sugar, head to sack</td><td id="s_sugar_d">–</td></tr>
+    <tr><td>taste / odour</td><td id="s_wtaste">–</td></tr>
+    <tr><td>light / heat / cool</td><td id="s_wlight">–</td></tr>
+    <tr><td>looming / touch</td><td id="s_wloom">–</td></tr>
   </table>
 </section>
     <section aria-labelledby="senses-details-title"><h3 id="senses-details-title">Senses</h3>  <table id="senses">

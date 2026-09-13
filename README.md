@@ -5,10 +5,12 @@ An emulated fruit fly, embodied and given infinite sugar.
 [infinitesugar.cnqso.com](https://infinitesugar.cnqso.com/)
 
 A whole-brain emulation using the FlyWire connectome: 139,255 neurons driving a simulated
-fruit fly in a terrarium. Its sweet-sensing neurons receive continuous stimulation. Feeding,
-head and antennal motion follow neural activity; wing movements, small foot shuffles and
-flight use supplied patterns gated by identified descending neurons. The corner map shows sampled FlyWire positions and connections lighting up
-as neurons fire.
+fruit fly in a terrarium. The terrarium is its world: a sack of sugar to find, a day and night,
+a beach ball, all reaching the brain through the real sensory populations, split by side. Its
+descending neurons decide when it walks, takes off, turns and lands. Feeding, head and antennal
+motion follow neural activity; the gait, wing movements, foot shuffles and flight use supplied
+patterns gated by identified descending neurons. The corner map shows sampled FlyWire positions
+and connections lighting up as neurons fire.
 
 Inspired by *Infinite Pain* (2025) by Harris Rosenblum.
 
@@ -26,15 +28,14 @@ The local server builds once at startup; restart it after editing source files.
 
 ## Controls
 
-Name the fly to begin. Drag to orbit and scroll to zoom. Tap the fly to touch it: a brief
-mechanosensory pulse, held longer on the head and antennae. Sugar, pause and recenter controls
-sit below the fly, with an environment strip for the other senses: touch, heat, cool, odour,
-bitter and damp are switches, Light also brightens the terrarium, and Loom sends a dark sphere
-at the fly. Each drives a real FlyWire population. A loom fires the escape circuit, and the
-escape circuit launches the fly: a short flight around the terrarium, steered by the real
-steering descending neurons, with the wingbeat and the flight path supplied (see
-[docs/12-flight.md](docs/12-flight.md)). It lands back on its perch once the escape neurons
-fall quiet.
+Name the fly to begin. Drag to orbit and scroll to zoom. Tap the fly to touch it. The fly lives
+on its own: it smells the sugar sack, walks in bouts when its walking neurons ask, feeds when it
+reaches the sugar, takes off when something looms, turns away from threats and toward smells,
+and lands wherever it is calm (see [docs/13-world.md](docs/13-world.md)). World, Sugar, pause
+and recenter controls sit below the fly. World switches the terrarium's senses off; Sugar
+overrides with infinite sugar wherever the fly is. The environment strip forces the other
+senses: touch, heat, cool, odour, bitter and damp are switches, Light also brightens the
+terrarium, and Loom sends a dark sphere at the fly.
 About contains the premise, technical summary, credits and further reading; Inspect shows
 neural activity, sensory input rates and simulation statistics.
 

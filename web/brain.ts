@@ -19,6 +19,8 @@ const BASE_MAX = 0.06;      // per-neuron tonic drive ~ U(0, BASE_MAX)
 const NOISE_PER_STEP = 300; // sparse random kicks per ms
 const NOISE_KICK = 0.42;
 
+const ROLE_SLOTS = 3;       // pools a neuron may be counted in: union, sub-pool, side
+
 type BrainMeta = { N: number, E: number, roles: Record<string, number[]> };
 type ActiveStimulus = { idx: Int32Array, amt: number };
 
@@ -50,14 +52,15 @@ export class Brain {
   declare totalSpikes: number;
   declare groups: Record<string, Int32Array>;
   declare roleNames: string[];
-  declare roleOf: Int8Array;
-  declare roleOf2: Int8Array;
+  declare roleOf: Int8Array;      // N x ROLE_SLOTS pool indices per neuron, -1 = none
   declare rate: Record<string, number>;
   declare _cnt: Int32Array;
   declare popRate: number;
   declare rateAlpha: number;
   declare STIM: Record<string, string[]>;
+  declare STIM_SIDES: Record<string, [string[], string[]]>;
   declare stim: Record<string, number>;
+  declare stimLR: Record<string, [number, number]>;
   declare stimDrive: number;
   declare stimGain: Record<string, number>;
   declare _active: ActiveStimulus[];
@@ -95,16 +98,16 @@ export class Brain {
     this.groups = {};
     for (const [k, arr] of Object.entries(meta.roles)) this.groups[k] = Int32Array.from(arr);
     this.roleNames = Object.keys(this.groups);
-    // A neuron can belong to a union pool and one sub-pool (mn_neck + mn_neck_l, thermo +
-    // thermo_hot). Rates are counted per pool, so both memberships are kept; a third would
-    // silently drop counts, hence the hard error. Readout telemetry only — no effect on dynamics.
-    this.roleOf = new Int8Array(N).fill(-1);
-    this.roleOf2 = new Int8Array(N).fill(-1);
+    // A neuron can belong to a union pool, a sub-pool and a side pool (hygro + hygro_cool +
+    // hygro_l). Rates are counted per pool, so every membership is kept, up to ROLE_SLOTS; one
+    // more would silently drop counts, hence the hard error. Readout only — no effect on dynamics.
+    this.roleOf = new Int8Array(N * ROLE_SLOTS).fill(-1);
     this.roleNames.forEach((k, ri) => {
       for (const i of this.groups[k]) {
-        if (this.roleOf[i] < 0) this.roleOf[i] = ri;
-        else if (this.roleOf2[i] < 0) this.roleOf2[i] = ri;
-        else throw new Error(`neuron ${i} is in more than two role pools (${k})`);
+        let slot = 0;
+        while (slot < ROLE_SLOTS && this.roleOf[i * ROLE_SLOTS + slot] >= 0) slot++;
+        if (slot === ROLE_SLOTS) throw new Error(`neuron ${i} is in more than ${ROLE_SLOTS} role pools (${k})`);
+        this.roleOf[i * ROLE_SLOTS + slot] = ri;
       }
     });
 
@@ -132,8 +135,20 @@ export class Brain {
       light:   ['visual'],
       looming: ['lc4', 'lplc2'],   // LC4 + LPLC2: the fly's actual looming detectors
     };
+    // Channels the world can drive from one side. Pools split by FlyWire's side label
+    // (tools/build_brain.py); a channel not listed here drives both sides equally.
+    this.STIM_SIDES = {
+      sweet:   [['grn_sweet_l'], ['grn_sweet_r']],
+      bitter:  [['grn_bitter_l'], ['grn_bitter_r']],
+      odour:   [['orn_l'], ['orn_r']],
+      touch:   [['mechano_l'], ['mechano_r']],
+      damp:    [['hygro_l'], ['hygro_r']],
+      light:   [['visual_l'], ['visual_r']],
+      looming: [['lc4_l', 'lplc2_l'], ['lc4_r', 'lplc2_r']],
+    };
     this.stim = {};
-    for (const k of Object.keys(this.STIM)) this.stim[k] = 0;
+    this.stimLR = {};
+    for (const k of Object.keys(this.STIM)) { this.stim[k] = 0; this.stimLR[k] = [0, 0]; }
     this.stimDrive = 0.20;       // membrane units at level 1
     // Per-channel multiplier on stimDrive. Explicit input gains, not a kernel change; the
     // default is 1 for every channel. heat: the seven hot cells receive ~0.36 units/ms of
@@ -165,19 +180,35 @@ export class Brain {
     return new Brain(meta, indptr, colidx, w);
   }
 
-  setStim(name: string, level: number) {
+  setStim(name: string, level: number) { this.setStimLR(name, level, level); }
+
+  // Left and right levels for a channel. Where the sides differ and the channel has
+  // side-split pools, the shared part drives the union pool and the excess drives the
+  // stronger side's pool, so unsided neurons (30 ORNs, 76 central visual cells) still see the
+  // common level. Equal levels are exactly the old uniform drive.
+  setStimLR(name: string, left: number, right: number) {
     if (!(name in this.stim)) return;
-    this.stim[name] = level;
+    this.stimLR[name] = [left, right];
+    this.stim[name] = Math.max(left, right);
     this._active = [];
     for (const k of Object.keys(this.stim)) {
-      const lv = this.stim[k];                       // each switch's OWN level, not the argument
-      if (lv <= 0) continue;
-      for (const r of this.STIM[k]) {
-        const g = this.groups[r];
-        if (g) this._active.push({ idx: g, amt: lv * this.stimDrive * (this.stimGain[k] || 1) });
+      const [l, r] = this.stimLR[k];                 // each channel's OWN levels, not the argument
+      const common = Math.min(l, r), gain = this.stimDrive * (this.stimGain[k] || 1);
+      if (common > 0) {
+        for (const p of this.STIM[k]) { const g = this.groups[p]; if (g) this._active.push({ idx: g, amt: common * gain }); }
       }
+      const sides = this.STIM_SIDES[k];
+      if (!sides || l === r) continue;
+      const extra = Math.abs(l - r);
+      for (const p of sides[l > r ? 0 : 1]) { const g = this.groups[p]; if (g) this._active.push({ idx: g, amt: extra * gain }); }
     }
     this.sugar = this.stim.sweet;
+  }
+
+  // Spikes in a pool during the last millisecond stepped (0 for an unknown pool).
+  spikesOf(role: string) {
+    const r = this.roleNames.indexOf(role);
+    return r < 0 ? 0 : this._cnt[r];
   }
 
   // Resting rates depend on the kernel, not just the wiring — the NumPy reference and this
@@ -254,8 +285,11 @@ export class Brain {
       for (let s = 0; s < ns; s++) {
         const i = spiked[s];
         this.lastSpikeMs[i] = this.ms;
-        const r = this.roleOf[i];
-        if (r >= 0) { this._cnt[r]++; const r2 = this.roleOf2[i]; if (r2 >= 0) this._cnt[r2]++; }
+        for (let slot = i * ROLE_SLOTS, e = slot + ROLE_SLOTS; slot < e; slot++) {
+          const r = this.roleOf[slot];
+          if (r < 0) break;
+          this._cnt[r]++;
+        }
       }
       for (let r = 0; r < this.roleNames.length; r++) {
         const k = this.roleNames[r], n0 = this.groups[k].length;

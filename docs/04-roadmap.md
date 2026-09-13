@@ -14,10 +14,11 @@ experience occurs.
 
 ## Input and output
 
-Sugar directly stimulates sweet-sensing gustatory neurons. The other sensory populations are
-switched from the environment strip, and a tap on the fly is a brief mechanosensory pulse. The
-terrarium itself supplies no visual, olfactory or contact feedback to the brain. See
-[environment](11-environment.md).
+The terrarium supplies the senses: a sugar sack the fly tastes by contact and smells at a
+distance, a day and night cycle for the visual, thermal and hygrosensory cells, and moving
+objects as looming and touch — each split by side, as the populations are in FlyWire. The
+environment strip overrides any of them, and a tap on the fly is a brief mechanosensory pulse.
+See [environment](11-environment.md) and [world](13-world.md).
 
 Identified feeding motor populations drive proboscis actuator targets through smoothed firing
 rates. Head and antennal responses also follow neural activity. Wing movements, foot
