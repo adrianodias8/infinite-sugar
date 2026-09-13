@@ -45,7 +45,7 @@ const lr = k => brain.stimLR[k];
 const head = () => { const b = mujoco.mj_name2id(model, 1, 'head'); return [data.xpos[b * 3], data.xpos[b * 3 + 1]]; };
 
 // 1. Sides: the split populations exist and a one-sided level reaches only that side's cells.
-for (const k of ['orn_l', 'orn_r', 'mechano_l', 'mechano_r', 'lc4_l', 'lc4_r', 'lplc2_l', 'lplc2_r', 'visual_l', 'visual_r', 'grn_sweet_l', 'grn_sweet_r']) assert(brain.groups[k] && brain.groups[k].length > 0, k);
+for (const k of ['orn_l', 'orn_r', 'mechano_l', 'mechano_r', 'lc4_l', 'lc4_r', 'lplc2_l', 'lplc2_r', 'lc11_l', 'lc11_r', 'visual_l', 'visual_r', 'grn_sweet_l', 'grn_sweet_r']) assert(brain.groups[k] && brain.groups[k].length > 0, k);
 brain.setStimLR('odour', 1, 0);
 brain.step(300);
 console.log('odour left only', { orn_l: brain.rate.orn_l.toFixed(0), orn_r: brain.rate.orn_r.toFixed(0), orn: brain.rate.orn.toFixed(0) });
@@ -109,7 +109,17 @@ assert(lo[0] > 0.3 && lo[1] < 0.05, 'a ball closing from the left looms on the l
 w.loomers = [{ x: leftX, y: leftY, z: data.qpos[2], vx: -Math.sin(yaw) * 1.0, vy: Math.cos(yaw) * 1.0, vz: 0, r: 0.12, name: 'ball' }];
 c.stepWorld(data, 0.001);
 assert.equal(w.levels.looming, 0, 'a ball moving away does not loom');
+// a small object crossing the view on the left drives the LC11 side, and does not loom
+w.loomers = [{ x: leftX, y: leftY, z: data.qpos[2], vx: Math.cos(yaw) * 0.6, vy: Math.sin(yaw) * 0.6, vz: 0, r: 0.05, name: 'ball' }];
+c.stepWorld(data, 0.001);
+const ob = lr('object');
+console.log('object crossing on the left', { level: w.levels.object.toFixed(2), left: ob[0].toFixed(2), right: ob[1].toFixed(2), looming: w.levels.looming });
+assert(ob[0] > 0.3 && ob[1] < 0.05 && w.levels.looming === 0, 'a crossing object drives LC11 on that side only');
 w.loomers = [];
+assert(lr('object')[0] > 0, 'the level persists until the next world step');
+c.stepWorld(data, 0.001);
+assert.equal(w.levels.object, 0, 'nothing crossing, nothing seen');
+assert.equal(lr('object')[0] + lr('object')[1], 0, 'and the channel is cleared');
 
 // 5. A contact queued by the ball physics is a touch on that flank; the switch-off clears everything.
 w.touchHits.push(Math.PI / 2);
@@ -130,7 +140,7 @@ assert(c.walkable(nx, ny), 'nearest walkable point is walkable');
 
 // 7. Grooming: DNg11 above its rest while standing lifts and rubs the front legs; quiet, never.
 c.flight.enabled = false;
-const femurT1 = mujoco.mj_name2id(model, 19, 'femur_T1_left'), swingT1 = mujoco.mj_name2id(model, 19, 'coxa_twist_T1_left');
+const femurT1 = mujoco.mj_name2id(model, 19, 'coxa_T1_left'), swingT1 = mujoco.mj_name2id(model, 19, 'coxa_twist_T1_left');   // coxa extension raises the leg
 const hold = [data.ctrl[femurT1], data.ctrl[swingT1]];
 const groomer = { rate: { dn_groom: 60 }, rest: { dn_groom: 22 } };
 for (let i = 0; i < 400; i++) c.stepGroom(groomer, data, 0.001);
@@ -138,7 +148,7 @@ assert(c.groom.active && c.groom.count === 1, 'a raised DNg11 starts a grooming 
 let maxLift = 0, maxSwing = 0;
 for (let i = 0; i < 500; i++) { c.stepGroom(groomer, data, 0.001); maxLift = Math.max(maxLift, Math.abs(data.ctrl[femurT1] - hold[0])); maxSwing = Math.max(maxSwing, Math.abs(data.ctrl[swingT1] - hold[1])); }
 console.log('grooming', { lift: maxLift.toFixed(3), swing: maxSwing.toFixed(3) });
-assert(maxLift > 0.1 && maxSwing > 0.2, 'front leg lifts (to the femur control limit) and rubs');
+assert(maxLift > 0.3 && maxSwing > 0.2, 'front leg is raised at the coxa and rubs');
 for (let i = 0; i < 1500; i++) c.stepGroom(groomer, data, 0.001);
 assert(!c.groom.active || c.groom.count >= 2, 'bouts end');
 const quiet = { rate: { dn_groom: 22 }, rest: { dn_groom: 22 } };
@@ -146,4 +156,4 @@ c.groom.active = false; c.groom.cooldown = 0; c.groom.ema = 22; const count = c.
 for (let i = 0; i < 2000; i++) c.stepGroom(quiet, data, 0.001);
 assert.equal(c.groom.count, count, 'a resting DNg11 never grooms');
 assert(Array.from(data.qpos).every(Number.isFinite) && Array.from(brain.v).every(Number.isFinite), 'finite');
-console.log('PASS: side pools, one-sided drive, labellar and tarsal sugar by contact, smell, lateral odour, feeding at the sack, daylight, shade, lateral looming, receding object, ball touch, world off, walkable floor, grooming');
+console.log('PASS: side pools, one-sided drive, labellar and tarsal sugar by contact, smell, lateral odour, feeding at the sack, daylight, shade, lateral looming, receding object, crossing object on LC11, ball touch, world off, walkable floor, grooming');

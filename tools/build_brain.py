@@ -60,6 +60,7 @@ for i in range(N):
     # --- looming detectors: the biologically correct trigger for the giant fiber -
     elif p == "LC4":                                         role[i] = "lc4"
     elif p == "LPLC2":                                       role[i] = "lplc2"
+    elif p == "LC11":                                        role[i] = "lc11"        # small-object motion detectors
     # --- inputs: sensory populations -------------------------------------------
     elif s == "sugar/water":                                 role[i] = "grn_sweet"
     elif s == "SA_VTV_pro_meso_meta" and c == "gustatory":   role[i] = "grn_sweet_leg"
@@ -83,7 +84,7 @@ for r in ("mn_neck", "mn_antenna", "dn_steer", "dn_escwing"):
 # smell/see/loom/touch the fly on the left or the right, and the steering and escape DNs are
 # split the same way, so a lateralised input has a chance of a lateralised output. Neurons
 # without a side (30 ORNs, 76 'center' visual cells) stay in the union only.
-for r in ("orn", "mechano", "visual", "lc4", "lplc2", "grn_sweet", "grn_bitter", "hygro"):
+for r in ("orn", "mechano", "visual", "lc4", "lplc2", "lc11", "grn_sweet", "grn_bitter", "hygro"):
     for sd in ("left", "right"):
         g = [i for i in groups[r] if side[i] == sd]
         if g: groups[f"{r}_{sd[0]}"] = g

@@ -139,6 +139,7 @@ export class Brain {
       damp:    ['hygro'],
       light:   ['visual'],
       looming: ['lc4', 'lplc2'],   // LC4 + LPLC2: the fly's actual looming detectors
+      object:  ['lc11'],           // LC11: small-object motion detectors (something crossing the view)
     };
     // Channels the world can drive from one side. Pools split by FlyWire's side label
     // (tools/build_brain.py); a channel not listed here drives both sides equally.
@@ -150,6 +151,7 @@ export class Brain {
       damp:    [['hygro_l'], ['hygro_r']],
       light:   [['visual_l'], ['visual_r']],
       looming: [['lc4_l', 'lplc2_l'], ['lc4_r', 'lplc2_r']],
+      object:  [['lc11_l'], ['lc11_r']],
     };
     this.stim = {};
     this.stimLR = {};

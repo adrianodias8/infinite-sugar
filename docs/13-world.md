@@ -49,6 +49,33 @@ Three things fell out of the wiring, none of them written by us:
   are the signs a fly would show.
 - **A loom on the left drives MDN**, the backward-walking neuron, +420 %: the fly backs off.
 
+**The browser kernel does not reproduce the odour sign.** The same one-sided inputs measured in
+the kernel the page actually runs (3 s means after calibration, Hz):
+
+```
+  condition        steer_l  steer_r  escwing_l  escwing_r  neck_l  neck_r  antenna_l  antenna_r  walk/s  back/s  pop
+  rest               71.5     50.7      0          0        14.8    15.0     22.0       26.4      0.67    23.7    7.1
+  odour L            71.2     61.5      0          0        14.7    15.7     22.5       27.3      1.0     20.7    8.1
+  odour R            69.7     56.6      0          0        15.0    15.5     22.5       26.9      1.3     11.0    8.1
+  loom L             64.3     57.4    226.2        0        14.5    16.4     20.6       25.2      3.0     20.3    6.7
+  touch L            46.5     51.0      0          0        15.8    36.4     49.9       31.9      0.33    20.7    8.1
+  noon (light .35)   69.6     50.9      0          0        14.1    14.6     22.0       26.7      1.5     19.0   11.8
+  night (dark, cool) 70.8     55.4      0.1        0        15.0    16.2     22.5       27.1      2.25    24.0    6.6
+```
+
+An odour on either side raises the *right* steering DN (50.7 → 61.5 / 56.6) and leaves the left
+where it is, so the fly does not turn toward a smell here; it wanders, and reaches the sack when
+its wandering takes it there. The escape lateralisation holds (226 / 0), a touch on the left
+turns the head and sweeps the left antenna, and the walking DN asks for a few more steps at
+night (0.67 → 2.25 spikes/s) while noon raises the whole-brain rate through the visual cells.
+Reported, not tuned.
+
+**A fourth visual population.** LC11, the small-object motion detectors (127 cells, 66 L /
+61 R), now has its own channel, `object`, driven by anything small crossing the view — the ball
+rolling past — by its angular velocity about the fly rather than its approach. Measured
+downstream (NumPy): the giant fiber −75 %, the proboscis −13 % (−27 % one-sided), the steering
+DNs +17 %; nothing that moves a joint on its own, which is the honest result.
+
 ## What the world supplies
 
 | sense | source | level |
@@ -59,6 +86,7 @@ Three things fell out of the wiring, none of them written by us:
 | light | a 120 s day, starting at noon; anything between the fly and the sun shades it | 0.35 × daylight × (1 − shade) |
 | heat / cool / damp | the same day | hot cells above 65 % daylight, cold, cooling and hygrosensory cells below 35 % |
 | looming | the beach ball, by time to collision from its real position and velocity, on the eye it approaches; the loom sphere by its own event | 1 − τ/0.6 s, scaled by angular size, within 1.2 cm |
+| object (LC11) | a small object crossing the view, by its angular velocity about the fly, on that side | (ω / 2 rad/s), fading as it fills the view, within 1.5 cm |
 | touch | the ball hitting the fly (cannon-es contact), on that flank; a tap | the poke pulse |
 
 **Tasting is by contact, and the reflex is not there.** Labellar and tarsal sugar sensing are
@@ -83,7 +111,7 @@ Every level is brain-tick state, so a slow device still feeds the same world to 
 | decision | neurons | measured |
 |---|---|---|
 | walk forward | DNp09 (`dn_walk`, 2 cells): each spike requests 0.6 s of steps, up to 2 s | 0.6 Hz at rest in the browser kernel |
-| walk backward | MDN (`dn_back`, 4 cells): a 100 ms mean above 2.5 × its calibrated rest | 17 Hz at rest in the browser kernel (1 Hz in NumPy), hence rest-relative |
+| walk backward | MDN (`dn_back`, 4 cells): a 100 ms mean above 2.5 × its calibrated rest | ~6 Hz per cell at rest in the browser kernel, 17 spikes/s for the pool (1 Hz in NumPy), hence rest-relative |
 | turn | DNa01/DNa02 (`dn_steer_l/r`): (L/rest_L − R/rest_R) / 0.6, clamped | L 70 / R 53 Hz at rest; the resting bias now reads as straight |
 | take off | DNp02/04/11: 100 ms mean of the stronger side above 100 Hz (a loom on one flank drives one side alone) | 0 at rest, ~200 under looming |
 | turn away | DNp02/04/11 asymmetry: −(L − R)/200 | 227 / 0 for a loom on the left |

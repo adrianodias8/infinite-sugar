@@ -611,7 +611,8 @@ function applyBrainToActuators(b: Brain, d: MjData) {
 // scales the lift. The small flexion-and-return pattern is ours, not a reconstructed gait.
 // No random timer, root translation, force on the thorax, or change to the brain kernel.
 type ShuffleLeg = { name: string, role: string, joints: { ai: number, offset: number }[], amount: number,
-                    swing: { ai: number, amp: number } };   // fore-aft joint for the walking stride (measured per segment)
+                    swing: { ai: number, amp: number },    // fore-aft joint for the walking stride (measured per segment)
+                    raise: number };                       // coxa extension actuator: lifts the whole leg (grooming)
 let shuffleLegs: ShuffleLeg[] = [];
 const shuffle = { enabled:true, active:-1, next:0, phase:0, charge:0,
                   cooldown:0.65, duration:0.5, strength:0, count:0 };
@@ -633,7 +634,9 @@ function buildShuffleMap() {
     const sai = mujoco.mj_name2id(model, 19, swingJoint);
     if (sai < 0) throw new Error(`missing swing actuator ${swingJoint}`);
     const amp = name.startsWith('T1') ? 0.5 : name.startsWith('T2') ? 0.4 : -0.5;
-    return { name, role:name.endsWith('left') ? 'dn_steer_l' : 'dn_steer_r', joints, amount:0, swing: { ai: sai, amp } };
+    const raise = mujoco.mj_name2id(model, 19, `coxa_${name}`);
+    if (raise < 0) throw new Error(`missing coxa actuator coxa_${name}`);
+    return { name, role:name.endsWith('left') ? 'dn_steer_l' : 'dn_steer_r', joints, amount:0, swing: { ai: sai, amp }, raise };
   });
   resetShuffle();
 }
@@ -641,7 +644,11 @@ function buildShuffleMap() {
 function resetShuffle() {
   Object.assign(shuffle, { active:-1, next:0, phase:0, charge:0,
                            cooldown:0.65, strength:0, count:0 });
-  for (const leg of shuffleLegs) { leg.amount = 0; if (leg.swing) data.ctrl[leg.swing.ai] = holdCtrl[leg.swing.ai]; }
+  for (const leg of shuffleLegs) {
+    leg.amount = 0;
+    if (leg.swing) data.ctrl[leg.swing.ai] = holdCtrl[leg.swing.ai];
+    if (leg.raise !== undefined) data.ctrl[leg.raise] = holdCtrl[leg.raise];
+  }
 }
 
 function stepShuffle(b: Brain, d: MjData, dt: number) {
@@ -691,14 +698,21 @@ const groom = { active: false, t: 0, ema: 0, cooldown: 0, count: 0 };
 function stepGroom(b: BrainLike, d: MjData, dt: number) {
   groom.ema += ((b.rate.dn_groom || 0) - groom.ema) * (dt / 0.2);
   const rest = b.rest && b.rest.dn_groom || 0;
+  if (!neural) {   // neural drive off stops every supplied pattern, the shuffle included
+    if (groom.active) { groom.active = false; groom.cooldown = 0; resetShuffle(); }
+    return;
+  }
   if (groom.active) {
     groom.t += dt;
     const u = smoothstep(Math.min(groom.t / 0.15, 1)) * smoothstep(Math.min((GROOM.duration - groom.t) / 0.15, 1));
     const rub = Math.sin(2 * Math.PI * GROOM.hz * groom.t);
+    // The foot is raised with the coxa (the femur can lift only 0.15 rad and a rub with the
+    // foot still on the floor scraped it) and flexed at the tibia, then rubbed fore-aft.
     for (const leg of shuffleLegs) {
       if (!leg.name.startsWith('T1')) continue;
-      for (const { ai, offset } of leg.joints) d.ctrl[ai] = ctrlClamp(ai, holdCtrl[ai] + offset * 1.6 * u);
-      d.ctrl[leg.swing.ai] = ctrlClamp(leg.swing.ai, holdCtrl[leg.swing.ai] + leg.swing.amp * u * (0.6 + 0.4 * rub));
+      for (const { ai, offset } of leg.joints) d.ctrl[ai] = ctrlClamp(ai, holdCtrl[ai] + offset * 1.2 * u);
+      d.ctrl[leg.raise] = ctrlClamp(leg.raise, holdCtrl[leg.raise] + 0.6 * u);
+      d.ctrl[leg.swing.ai] = ctrlClamp(leg.swing.ai, holdCtrl[leg.swing.ai] + leg.swing.amp * u * (0.5 + 0.3 * rub));
     }
     if (groom.t >= GROOM.duration) { groom.active = false; groom.cooldown = GROOM.cooldown; resetShuffle(); }
     return;
@@ -852,6 +866,7 @@ const WORLD = {
   tasteReach: 0.03,    // the labellum tastes within this of the sack's surface; the feet within footReach of its base
   footReach: 0.04,
   loomRange: 1.2, loomTau: 0.6,   // objects closer than loomRange on a collision course within loomTau seconds loom
+  objectRange: 1.5, objectRate: 2.0,   // a small object crossing the view within objectRange at objectRate rad/s drives LC11 fully
   floorZ: -0.132,      // the physics floor; the terrarium's visual floor undulates just above it
   floorBand: 0.23,     // ground hits up to this far above floorZ count as walkable floor (the floor undulates to +0.10)
 };
@@ -864,7 +879,7 @@ const world = {
   loomers: [] as Loomer[],                               // written by main (ball) each frame
   touchHits: [] as number[],                             // bearings of contacts, queued by main
   ground: null as GroundMap | null,                      // walkable floor cells, sampled from the terrarium mesh
-  levels: { sweet:0, sweetLeg:0, odour:0, light:0, heat:0, cool:0, damp:0, looming:0, touch:0 },
+  levels: { sweet:0, sweetLeg:0, odour:0, light:0, heat:0, cool:0, damp:0, looming:0, object:0, touch:0 },
   headBody: -1, labrumBodies: [] as number[], clawBodies: [] as number[],
 };
 function buildWorldMap() {
@@ -945,11 +960,20 @@ function stepWorld(d: MjData, dt: number) {
   L.odour = 0.8 * clamp(1 - (dh - S.r) / WORLD.odourRange, 0, 1);
   const od = lateral(L.odour, bearingTo(d, S.x, S.y));
   setWorld('odour', od[0], od[1]);
-  // --- moving objects: looming by time to collision, on the eye they approach
-  let lo = 0, ro = 0; L.looming = 0;
+  // --- moving objects: looming by time to collision, on the eye they approach; and a small
+  //     object crossing the view (angular velocity, not approach) for the LC11 detectors
+  let lo = 0, ro = 0, ol = 0, or_ = 0; L.looming = 0; L.object = 0;
   for (const o of world.loomers) {
     const rx = o.x - fx, ry = o.y - fy, rz = o.z - fz, dist = Math.hypot(rx, ry, rz);
-    if (dist > WORLD.loomRange || dist < 1e-6) continue;
+    if (dist < 1e-6) continue;
+    const speed = Math.hypot(o.vx, o.vy, o.vz);
+    if (speed > 0.02 && dist <= WORLD.objectRange) {
+      const vApp = -(rx * o.vx + ry * o.vy + rz * o.vz) / dist;
+      const vTan = Math.sqrt(Math.max(0, speed * speed - vApp * vApp));
+      const level = clamp((vTan / dist) / WORLD.objectRate, 0, 1) * clamp(1 - Math.atan2(o.r, dist) / 0.5, 0, 1);   // small in the view
+      if (level > 0) { const lr = lateral(level, bearingTo(d, o.x, o.y)); ol = Math.max(ol, lr[0]); or_ = Math.max(or_, lr[1]); L.object = Math.max(L.object, level); }
+    }
+    if (dist > WORLD.loomRange) continue;
     const vApp = -(rx * o.vx + ry * o.vy + rz * o.vz) / dist;
     if (vApp <= 0.02) continue;
     const tau = dist / vApp;
@@ -958,7 +982,7 @@ function stepWorld(d: MjData, dt: number) {
     const lr = lateral(level, bearingTo(d, o.x, o.y));
     lo = Math.max(lo, lr[0]); ro = Math.max(ro, lr[1]); L.looming = Math.max(L.looming, level);
   }
-  setWorld('looming', lo, ro);
+  setWorld('looming', lo, ro); setWorld('object', ol, or_);
   // --- contacts queued by the ball physics become touches on that flank
   if (world.touchHits.length) {
     const bearing = world.touchHits[world.touchHits.length - 1];
@@ -1759,6 +1783,7 @@ function stepSimulation() {
         $('s_hygro').textContent = brain.rate.hygro.toFixed(0) + ' Hz';
         $('s_vis').textContent  = brain.rate.visual.toFixed(0) + ' Hz';
         $('s_loom').textContent = ((brain.rate.lc4 + brain.rate.lplc2) / 2).toFixed(0) + ' Hz';
+        $('s_lc11').textContent = brain.rate.lc11.toFixed(0) + ' Hz';
         $('s_mnp').textContent  = brain.rate.mn_proboscis.toFixed(1) + ' Hz';
         $('s_mni').textContent  = brain.rate.mn_ingestion.toFixed(1) + ' Hz';
         $('s_neck').textContent = ((brain.rate.mn_neck_l + brain.rate.mn_neck_r) / 2).toFixed(1) + ' Hz';
@@ -1775,7 +1800,7 @@ function stepSimulation() {
         $('s_sugar_d').textContent = world.sugar.placed ? `${world.sugarDist.toFixed(2)} cm` : '–';
         $('s_wtaste').textContent = `${wl.sweet.toFixed(2)} / ${wl.sweetLeg.toFixed(2)} / ${wl.odour.toFixed(2)}`;
         $('s_wlight').textContent = `${wl.light.toFixed(2)} / ${wl.heat.toFixed(2)} / ${wl.cool.toFixed(2)}`;
-        $('s_wloom').textContent = `${wl.looming.toFixed(2)} / ${wl.touch.toFixed(2)}`;
+        $('s_wloom').textContent = `${wl.looming.toFixed(2)} / ${wl.object.toFixed(2)} / ${wl.touch.toFixed(2)}`;
         $('s_steerside').textContent = flight.asym.toFixed(2);
       }
       $('s_cnt').textContent  = brain.sugarFeedSpikes.toLocaleString();
