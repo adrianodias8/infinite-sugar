@@ -27,8 +27,10 @@ The local server builds once at startup; restart it after editing source files.
 ## Controls
 
 Name the fly to begin. Drag to orbit and scroll to zoom. Sugar, pause and recenter controls
-sit below the fly. About contains the premise, technical summary, credits and further reading;
-Inspect shows neural activity and simulation statistics.
+sit below the fly, with an environment strip that switches the other sensory inputs (touch,
+heat, light, looming, odour, bitter, damp) on and off; each drives a real FlyWire population.
+About contains the premise, technical summary, credits and further reading; Inspect shows
+neural activity, sensory input rates and simulation statistics.
 
 ## Credits
 

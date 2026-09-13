@@ -36,7 +36,13 @@ canvas{display:block;position:fixed;inset:0;z-index:0;touch-action:none}
 .neural-legend span{display:flex;align-items:center;gap:5px}
 .neural-legend span:before{content:'';width:4px;height:4px;border-radius:50%;background:var(--neural-color)}
 .neural-legend .sensory{--neural-color:#76caff}.neural-legend .internal{--neural-color:#ec8cbc}.neural-legend .motor{--neural-color:#f5d878}
-.art-controls{display:flex;gap:8px;align-items:center;pointer-events:auto}
+.art-controls{display:flex;flex-direction:column;gap:10px;align-items:center;pointer-events:auto}
+.control-row{display:flex;gap:8px;align-items:center}
+.stim-strip{display:flex;flex-wrap:wrap;justify-content:center;gap:6px;max-width:400px}
+.stim-button{min-height:36px;padding:7px 14px;border:1px solid #ffffff38;border-radius:20px;background:#1b181fb8;backdrop-filter:blur(10px);color:#ddd4de;font-size:12px;letter-spacing:.02em;transition:background .2s,color .2s,border-color .2s}
+.stim-button:hover{border-color:#ffffff80;color:var(--ink)}
+.stim-button.on{background:#e6def0;border-color:#e6def0;color:#2a2231}
+#senses tr.on td{color:var(--sugar)}
 .icon-button{display:inline-grid;place-items:center;width:44px;height:44px;flex-shrink:0;padding:11px;border:1px solid #ffffff29;border-radius:50%;background:#19151b66;backdrop-filter:blur(10px);transition:background .2s,border-color .2s}
 .icon-button:hover{background:#ffffff14;border-color:#ffffff70}
 .icon-button svg{height:20px;width:20px;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
@@ -121,7 +127,9 @@ h3{font-size:12px;text-transform:uppercase;letter-spacing:.11em;color:var(--mute
 .counter{grid-column:1;grid-row:1}
 .counter>#s_cnt{font-size:40px}
 .inspect-button{grid-column:2;grid-row:1}
-.art-controls{grid-column:1 / -1;justify-self:center}
+.art-controls{grid-column:1 / -1;justify-self:center;gap:8px}
+.stim-strip{max-width:100%;gap:5px}
+.stim-button{min-height:34px;padding:6px 11px;font-size:11px}
 dialog{padding:40px 26px}
 h2{font-size:38px}
 #inspect{padding:32px 24px}
@@ -148,7 +156,7 @@ h2{font-size:38px}
 .masthead{padding-top:max(26px,env(safe-area-inset-top));padding-left:max(24px,env(safe-area-inset-left));padding-right:max(24px,env(safe-area-inset-right))}
 .art-footer{padding-bottom:max(24px,env(safe-area-inset-bottom));padding-left:max(24px,env(safe-area-inset-left));padding-right:max(24px,env(safe-area-inset-right))}
 #artwork{height:100dvh}
-body[data-quality="low"] .neural-view,body[data-quality="low"] .icon-button,body[data-quality="low"] dialog::backdrop{backdrop-filter:none}
+body[data-quality="low"] .neural-view,body[data-quality="low"] .icon-button,body[data-quality="low"] .stim-button,body[data-quality="low"] dialog::backdrop{backdrop-filter:none}
 @media(max-width:380px){
   .masthead,.art-footer{padding-left:max(16px,env(safe-area-inset-left));padding-right:max(16px,env(safe-area-inset-right));gap:14px}
   .identity h1{font-size:32px}
@@ -169,3 +177,5 @@ body[data-quality="low"] .neural-view,body[data-quality="low"] .icon-button,body
   .masthead{padding:38px max(44px,env(safe-area-inset-right)) 38px max(44px,env(safe-area-inset-left))}
   .art-footer{padding:32px max(44px,env(safe-area-inset-right)) max(38px,env(safe-area-inset-bottom)) max(44px,env(safe-area-inset-left))}
 }
+
+@media(pointer:coarse){.stim-button{min-height:40px}}

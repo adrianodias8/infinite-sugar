@@ -826,16 +826,22 @@ function stepSimulation() {
       }
       btn.onclick = () => {
         brain.setStim(k, brain.stim[k] > 0 ? 0 : 1);
-        for (const other of document.querySelectorAll('[data-stim]')) {
-          if (!(other instanceof HTMLButtonElement)) continue;
-          const on = brain.stim[other.dataset.stim || ''] > 0;
-          other.classList.toggle('on', on);
-          other.setAttribute('aria-pressed', String(on));
-        }
-        $('sugar-label').textContent = brain.sugar > 0 ? 'Sugar on' : 'Sugar off';
-        document.body.classList.toggle('is-sugar-off', brain.sugar <= 0);
+        syncStimUI();
       };
     }
+    // Reflect brain.stim in every [data-stim] control and inspector row. Called on clicks and
+    // by any code that sets a stimulus programmatically, so the page never shows stale state.
+    function syncStimUI() {
+      for (const el of document.querySelectorAll('[data-stim]')) {
+        if (!(el instanceof HTMLElement)) continue;
+        const on = brain.stim[el.dataset.stim || ''] > 0;
+        el.classList.toggle('on', on);
+        if (el instanceof HTMLButtonElement) el.setAttribute('aria-pressed', String(on));
+      }
+      $('sugar-label').textContent = brain.sugar > 0 ? 'Sugar on' : 'Sugar off';
+      document.body.classList.toggle('is-sugar-off', brain.sugar <= 0);
+    }
+    syncStimUI();
 
     for (const [triggerId, dialogId] of [['b_about', 'about'], ['b_inspect', 'inspect']]) {
       const dialog = $(dialogId);
@@ -928,6 +934,13 @@ function stepSimulation() {
         $('s_bms').textContent  = ((brain.ms - sim.brainStartMs) / 1000).toFixed(2) + ' s';
         $('s_pop').textContent  = brain.popRate.toFixed(1) + ' Hz';
         $('s_grn').textContent  = brain.rate.grn_sweet.toFixed(0) + ' Hz';
+        $('s_bitter').textContent = brain.rate.grn_bitter.toFixed(0) + ' Hz';
+        $('s_orn').textContent  = brain.rate.orn.toFixed(0) + ' Hz';
+        $('s_mech').textContent = brain.rate.mechano.toFixed(0) + ' Hz';
+        $('s_thermo').textContent = brain.rate.thermo.toFixed(0) + ' Hz';
+        $('s_hygro').textContent = brain.rate.hygro.toFixed(0) + ' Hz';
+        $('s_vis').textContent  = brain.rate.visual.toFixed(0) + ' Hz';
+        $('s_loom').textContent = ((brain.rate.lc4 + brain.rate.lplc2) / 2).toFixed(0) + ' Hz';
         $('s_mnp').textContent  = brain.rate.mn_proboscis.toFixed(1) + ' Hz';
         $('s_mni').textContent  = brain.rate.mn_ingestion.toFixed(1) + ' Hz';
         $('s_neck').textContent = ((brain.rate.mn_neck_l + brain.rate.mn_neck_r) / 2).toFixed(1) + ' Hz';

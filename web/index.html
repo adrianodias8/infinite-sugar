@@ -56,6 +56,7 @@
     </figure>
     </div>
     <div class="art-controls">
+    <div class="control-row">
       <button id="b_pause" class="icon-button" aria-label="Pause" title="Pause">
         <svg viewBox="0 0 24 24" aria-hidden="true"><g class="pause-symbol"><path d="M9 6v12M15 6v12"/></g><g class="play-symbol"><path d="m9 6 9 6-9 6Z"/></g></svg>
       </button>
@@ -63,6 +64,16 @@
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4H4v4m12-4h4v4M4 16v4h4m12-4v4h-4"/><circle cx="12" cy="12" r="3"/></svg>
       </button>
       <button id="b_sugar" class="sugar-button on" data-stim="sweet" aria-pressed="true"><span class="sugar-dot" aria-hidden="true"></span><span id="sugar-label">Sugar on</span></button>
+    </div>
+    <div class="stim-strip" role="group" aria-label="Environment">
+      <button class="stim-button" data-stim="touch" aria-pressed="false" title="Mechanosensory neurons (2,674)">Touch</button>
+      <button class="stim-button" data-stim="heat" aria-pressed="false" title="Thermosensory neurons (29)">Heat</button>
+      <button class="stim-button" data-stim="light" aria-pressed="false" title="Visual neurons (11,426)">Light</button>
+      <button class="stim-button" data-stim="looming" aria-pressed="false" title="Looming detectors LC4 + LPLC2 (314)">Looming</button>
+      <button class="stim-button" data-stim="odour" aria-pressed="false" title="Olfactory receptor neurons (2,281)">Odour</button>
+      <button class="stim-button" data-stim="bitter" aria-pressed="false" title="Bitter gustatory neurons (65)">Bitter</button>
+      <button class="stim-button" data-stim="damp" aria-pressed="false" title="Hygrosensory neurons (74)">Damp</button>
+    </div>
     </div>
     <button id="b_inspect" class="text-button inspect-button" aria-haspopup="dialog">Inspect</button>
   </footer>
@@ -105,7 +116,6 @@
     <tr><td>connections</td><td id="s_syn">–</td></tr>
     <tr><td>brain time</td><td id="s_bms">–</td></tr>
     <tr><td>whole brain</td><td id="s_pop">–</td></tr>
-    <tr><td>sweet GRN</td><td id="s_grn">–</td></tr>
     <tr><td>proboscis MN</td><td id="s_mnp">–</td></tr>
     <tr><td>ingestion MN</td><td id="s_mni">–</td></tr>
     <tr><td>neck MN</td><td id="s_neck">–</td></tr>
@@ -115,6 +125,17 @@
     <tr><td>steering DN L/R</td><td id="s_steer">–</td></tr>
     <tr><td>grooming DN</td><td id="s_groom">–</td></tr>
     <tr><td>PAM (DA)</td><td id="s_pam">–</td></tr>
+  </table>
+</section>
+    <section aria-labelledby="senses-details-title"><h3 id="senses-details-title">Senses</h3>  <table id="senses">
+    <tr data-stim="sweet"><td>sweet GRN</td><td id="s_grn">–</td></tr>
+    <tr data-stim="bitter"><td>bitter GRN</td><td id="s_bitter">–</td></tr>
+    <tr data-stim="odour"><td>olfactory RN</td><td id="s_orn">–</td></tr>
+    <tr data-stim="touch"><td>mechanosensory</td><td id="s_mech">–</td></tr>
+    <tr data-stim="heat"><td>thermosensory</td><td id="s_thermo">–</td></tr>
+    <tr data-stim="damp"><td>hygrosensory</td><td id="s_hygro">–</td></tr>
+    <tr data-stim="light"><td>visual</td><td id="s_vis">–</td></tr>
+    <tr data-stim="looming"><td>looming LC4/LPLC2</td><td id="s_loom">–</td></tr>
   </table>
 </section>
     <section aria-labelledby="simulation-details-title"><h3 id="simulation-details-title">Simulation</h3>  <table>
