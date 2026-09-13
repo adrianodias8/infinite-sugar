@@ -250,7 +250,7 @@ async function loadProps(scene: THREE.Scene, flyBox: THREE.Box3) {
       const box1 = new THREE.Box3().setFromObject(wrap);
       const size1 = new THREE.Vector3(); box1.getSize(size1);
       wrap.position.set(p.floor[0], p.floor[1], WORLD.floorZ - box1.min.z);
-      if (p.file === 'sugar_sack.glb') world.sugar = { x: p.floor[0], y: p.floor[1], r: 0.5 * Math.max(size1.x, size1.y) + 0.05, placed: true };
+      if (p.file === 'sugar_sack.glb') world.sugar = { x: p.floor[0], y: p.floor[1], r: 0.5 * Math.max(size1.x, size1.y), placed: true };   // r: the sack's surface
     } else {
       if (!p.pos) throw new Error(`prop "${p.file}" needs abs or pos coordinates`);
       const box1 = new THREE.Box3().setFromObject(wrap);  // re-measure post-scale, world origin
@@ -438,6 +438,7 @@ function stepBall(dt: number) {
   world.loomers[0] = { x: p.x, y: p.y, z: p.z, vx: v.x, vy: v.y, vz: v.z, r: ball.radius, name: 'ball' };
 }
 
+type BrainLike = { rate: Record<string, number>, rest?: Record<string, number> | null, spikesOf?: (role: string) => number };
 // ---------------------------------------------------------------- pose hold
 // 64 of the 78 actuators are position-servos. Drive them to the keyframe pose so the
 // fly stands instead of collapsing — no controller, no policy, just a held posture.
@@ -609,7 +610,8 @@ function applyBrainToActuators(b: Brain, d: MjData) {
 // leg motor circuit. DNg11 activity accumulates into a request; ipsilateral steering activity
 // scales the lift. The small flexion-and-return pattern is ours, not a reconstructed gait.
 // No random timer, root translation, force on the thorax, or change to the brain kernel.
-type ShuffleLeg = { name: string, role: string, joints: { ai: number, offset: number }[], amount: number };
+type ShuffleLeg = { name: string, role: string, joints: { ai: number, offset: number }[], amount: number,
+                    swing: { ai: number, amp: number } };   // fore-aft joint for the walking stride (measured per segment)
 let shuffleLegs: ShuffleLeg[] = [];
 const shuffle = { enabled:true, active:-1, next:0, phase:0, charge:0,
                   cooldown:0.65, duration:0.5, strength:0, count:0 };
@@ -625,7 +627,13 @@ function buildShuffleMap() {
       if (ai < 0) throw new Error(`missing shuffle actuator ${joint}_${name}`);
       return { ai, offset:offsets[i] };
     });
-    return { name, role:name.endsWith('left') ? 'dn_steer_l' : 'dn_steer_r', joints, amount:0 };
+    // Fore-aft swing, measured on a lifted foot: coxa twist moves the front and middle feet
+    // forward (+), femur twist moves the hind feet forward with the opposite sign.
+    const swingJoint = name.startsWith('T3') ? `femur_twist_${name}` : `coxa_twist_${name}`;
+    const sai = mujoco.mj_name2id(model, 19, swingJoint);
+    if (sai < 0) throw new Error(`missing swing actuator ${swingJoint}`);
+    const amp = name.startsWith('T1') ? 0.5 : name.startsWith('T2') ? 0.4 : -0.5;
+    return { name, role:name.endsWith('left') ? 'dn_steer_l' : 'dn_steer_r', joints, amount:0, swing: { ai: sai, amp } };
   });
   resetShuffle();
 }
@@ -633,7 +641,7 @@ function buildShuffleMap() {
 function resetShuffle() {
   Object.assign(shuffle, { active:-1, next:0, phase:0, charge:0,
                            cooldown:0.65, strength:0, count:0 });
-  for (const leg of shuffleLegs) leg.amount = 0;
+  for (const leg of shuffleLegs) { leg.amount = 0; if (leg.swing) data.ctrl[leg.swing.ai] = holdCtrl[leg.swing.ai]; }
 }
 
 function stepShuffle(b: Brain, d: MjData, dt: number) {
@@ -669,6 +677,35 @@ function stepShuffle(b: Brain, d: MjData, dt: number) {
       d.ctrl[ai] = Math.max(model.actuator_ctrlrange[2 * ai],
         Math.min(model.actuator_ctrlrange[2 * ai + 1], holdCtrl[ai] + offset * leg.amount));
     }
+  }
+}
+
+// ------------------------------------------------------------- grooming
+// A command mapping, like the shuffle: DNg11 (dn_groom) is the identified antennal-grooming
+// descending neuron, and it rises under touch (22.9 -> 33.8 Hz measured). When its 200 ms mean
+// exceeds GROOM.gain times its calibrated rest while the fly stands, the front legs are lifted
+// and rubbed forward over the head for GROOM.duration seconds (supplied motion, ours). No
+// change to the brain, no timer: a quiet DNg11 never grooms.
+const GROOM = { gain: 1.35, duration: 0.9, hz: 4, cooldown: 1.5 };
+const groom = { active: false, t: 0, ema: 0, cooldown: 0, count: 0 };
+function stepGroom(b: BrainLike, d: MjData, dt: number) {
+  groom.ema += ((b.rate.dn_groom || 0) - groom.ema) * (dt / 0.2);
+  const rest = b.rest && b.rest.dn_groom || 0;
+  if (groom.active) {
+    groom.t += dt;
+    const u = smoothstep(Math.min(groom.t / 0.15, 1)) * smoothstep(Math.min((GROOM.duration - groom.t) / 0.15, 1));
+    const rub = Math.sin(2 * Math.PI * GROOM.hz * groom.t);
+    for (const leg of shuffleLegs) {
+      if (!leg.name.startsWith('T1')) continue;
+      for (const { ai, offset } of leg.joints) d.ctrl[ai] = ctrlClamp(ai, holdCtrl[ai] + offset * 1.6 * u);
+      d.ctrl[leg.swing.ai] = ctrlClamp(leg.swing.ai, holdCtrl[leg.swing.ai] + leg.swing.amp * u * (0.6 + 0.4 * rub));
+    }
+    if (groom.t >= GROOM.duration) { groom.active = false; groom.cooldown = GROOM.cooldown; resetShuffle(); }
+    return;
+  }
+  if (groom.cooldown > 0) { groom.cooldown -= dt; return; }
+  if (neural && rest > 0 && groom.ema > GROOM.gain * rest && flight.state === 'ground') {
+    groom.active = true; groom.t = 0; groom.count++;
   }
 }
 
@@ -812,7 +849,8 @@ const WORLD = {
   dayPeriod: 120,      // seconds per day; the simulation starts at noon
   lightMax: 0.35,      // visual level in full daylight (see above)
   odourRange: 0.8,     // cm beyond the sugar at which the odour reaches zero
-  tasteReach: 0.05,    // cm beyond the sugar radius the labellum can still taste
+  tasteReach: 0.03,    // the labellum tastes within this of the sack's surface; the feet within footReach of its base
+  footReach: 0.04,
   loomRange: 1.2, loomTau: 0.6,   // objects closer than loomRange on a collision course within loomTau seconds loom
   floorZ: -0.132,      // the physics floor; the terrarium's visual floor undulates just above it
   floorBand: 0.23,     // ground hits up to this far above floorZ count as walkable floor (the floor undulates to +0.10)
@@ -826,11 +864,12 @@ const world = {
   loomers: [] as Loomer[],                               // written by main (ball) each frame
   touchHits: [] as number[],                             // bearings of contacts, queued by main
   ground: null as GroundMap | null,                      // walkable floor cells, sampled from the terrarium mesh
-  levels: { sweet:0, odour:0, light:0, heat:0, cool:0, damp:0, looming:0, touch:0 },
-  headBody: -1, clawBodies: [] as number[],
+  levels: { sweet:0, sweetLeg:0, odour:0, light:0, heat:0, cool:0, damp:0, looming:0, touch:0 },
+  headBody: -1, labrumBodies: [] as number[], clawBodies: [] as number[],
 };
 function buildWorldMap() {
   world.headBody = mujoco.mj_name2id(model, 1 /* mjOBJ_BODY */, 'head');
+  world.labrumBodies = ['labrum_left', 'labrum_right'].map(n => mujoco.mj_name2id(model, 1, n)).filter(b => b >= 0);
   world.clawBodies = [];
   for (const leg of ['T1_left', 'T1_right', 'T2_left', 'T2_right', 'T3_left', 'T3_right']) {
     const b = mujoco.mj_name2id(model, 1, `claw_${leg}`);
@@ -884,18 +923,25 @@ function stepWorld(d: MjData, dt: number) {
   L.damp = 0.3 * clamp((0.35 - world.day) / 0.35, 0, 1);
   setWorld('light', L.light, L.light); setWorld('heat', L.heat, L.heat);
   setWorld('cool', L.cool, L.cool); setWorld('damp', L.damp, L.damp);
-  // --- sugar: taste at the mouthparts and feet, odour at the antennae
+  // --- sugar: the labellum tastes by touching the sack's surface (it hangs 0.05 under the head
+  //     and extends only 0.02 further down, so it never reaches the floor from a standing body);
+  //     the feet taste the sugar at the sack's base; odour reaches the antennae from a distance.
   const S = world.sugar;
   const hb = world.headBody;
   const hx = hb >= 0 ? d.xpos[hb * 3] : fx, hy = hb >= 0 ? d.xpos[hb * 3 + 1] : fy;
   const dh = Math.hypot(hx - S.x, hy - S.y);
   world.sugarDist = dh;
-  const labellar = clamp(1 - (dh - S.r) / WORLD.tasteReach, 0, 1);
+  let tipX = hx, tipY = hy;
+  if (world.labrumBodies.length) {
+    tipX = 0; tipY = 0;
+    for (const b of world.labrumBodies) { tipX += d.xpos[b * 3] / world.labrumBodies.length; tipY += d.xpos[b * 3 + 1] / world.labrumBodies.length; }
+  }
+  const labellar = clamp(1 - (Math.hypot(tipX - S.x, tipY - S.y) - S.r) / WORLD.tasteReach, 0, 1);
   let feet = 0;
-  for (const b of world.clawBodies) if (Math.hypot(d.xpos[b * 3] - S.x, d.xpos[b * 3 + 1] - S.y) < S.r) feet++;
+  for (const b of world.clawBodies) if (Math.hypot(d.xpos[b * 3] - S.x, d.xpos[b * 3 + 1] - S.y) < S.r + WORLD.footReach) feet++;
   const tarsal = world.clawBodies.length ? feet / world.clawBodies.length : 0;
-  L.sweet = Math.max(labellar, 0.6 * tarsal);
-  setWorld('sweet', L.sweet, L.sweet);
+  L.sweet = labellar; L.sweetLeg = tarsal;
+  setWorld('sweet', labellar, labellar); setWorld('sweetLeg', tarsal, tarsal);
   L.odour = 0.8 * clamp(1 - (dh - S.r) / WORLD.odourRange, 0, 1);
   const od = lateral(L.odour, bearingTo(d, S.x, S.y));
   setWorld('odour', od[0], od[1]);
@@ -1010,7 +1056,6 @@ function qmul(a: number[], b: number[]) {
 }
 const qaxis = (x: number, y: number, z: number, a: number) => [Math.cos(a / 2), x * Math.sin(a / 2), y * Math.sin(a / 2), z * Math.sin(a / 2)];
 
-type BrainLike = { rate: Record<string, number>, rest?: Record<string, number> | null, spikesOf?: (role: string) => number };
 function leaveGround(d: MjData) {
   flight.standZ = d.qpos[2];
   flight.home = { x: d.qpos[0], y: d.qpos[1], z: d.qpos[2], yaw: yawOf(d.qpos.subarray(3, 7)) };
@@ -1221,17 +1266,23 @@ function writeFlightPose(d: MjData) {
 // (lifted, they fold up into the wing stroke and pin the wings against the femur). Walking is
 // a tripod cycle: alternate sets of three feet swing while the body is carried forward.
 const TRIPOD_A = new Set(['T1_left', 'T2_right', 'T3_left']);
+const ctrlClamp = (ai: number, v: number) => Math.max(model.actuator_ctrlrange[2 * ai], Math.min(model.actuator_ctrlrange[2 * ai + 1], v));
 function stepFlightLegs(d: MjData) {
   const walking = flight.state === 'walk';
+  const dir = flight.walk.dir > 0 ? 1 : -1;
   for (const leg of shuffleLegs) {
     leg.amount = 0;
-    let lift: number;
-    if (walking) lift = 0.8 * Math.max(0, Math.sin(flight.walk.phase + (TRIPOD_A.has(leg.name) ? 0 : Math.PI)));
-    else lift = leg.name.startsWith('T3') ? 0 : flight.tuck * 2.2;
-    for (const { ai, offset } of leg.joints) {
-      d.ctrl[ai] = Math.max(model.actuator_ctrlrange[2 * ai],
-        Math.min(model.actuator_ctrlrange[2 * ai + 1], holdCtrl[ai] + offset * lift));
-    }
+    let lift: number, swing = 0;
+    if (walking) {
+      // Tripod cycle. A foot lifts through the swing half (sin > 0) while its fore-aft joint
+      // carries it forward, and is planted through the stance half while the joint carries it
+      // back at the body's speed, so stance feet stay put as the body is carried forward.
+      const ph = flight.walk.phase + (TRIPOD_A.has(leg.name) ? 0 : Math.PI);
+      lift = 1.0 * Math.max(0, Math.sin(ph));
+      swing = -Math.cos(ph) * dir;                       // -1 at lift-off (foot back) .. +1 at touchdown (foot forward)
+    } else lift = leg.name.startsWith('T3') ? 0 : flight.tuck * 2.2;
+    for (const { ai, offset } of leg.joints) d.ctrl[ai] = ctrlClamp(ai, holdCtrl[ai] + offset * lift);
+    d.ctrl[leg.swing.ai] = ctrlClamp(leg.swing.ai, holdCtrl[leg.swing.ai] + leg.swing.amp * swing);
   }
 }
 
@@ -1248,8 +1299,8 @@ function stepSimulation() {
     stepLoom(data, 0.001);
     applyBrainToActuators(brain, data);
     stepFlight(brain, data, 0.001);
-    if (flight.state === 'ground') stepShuffle(brain, data, 0.001);
-    else stepFlightLegs(data);
+    if (flight.state === 'ground') { stepShuffle(brain, data, 0.001); stepGroom(brain, data, 0.001); }
+    else { stepFlightLegs(data); groom.active = false; }
   }
 }
 
@@ -1303,7 +1354,7 @@ function stepSimulation() {
     const homeTarget = controls.target.clone();
     $('b_home').onclick = () => {
       // Recenter on the fly wherever it is: the home framing, offset to the live thorax.
-      const t = flight.state === 'ground' ? homeTarget : followTarget();
+      const t = followTarget();
       camera.position.copy(homePosition).sub(homeTarget).add(t); controls.target.copy(t); controls.update();
     };
     const followPos = new THREE.Vector3(), followDelta = new THREE.Vector3();
@@ -1311,18 +1362,12 @@ function stepSimulation() {
     function followTarget() {
       return followPos.set(data.xpos[followBody * 3], data.xpos[followBody * 3 + 1], data.xpos[followBody * 3 + 2]);
     }
-    // In flight the orbit target tracks the thorax while the camera stays where the user put
-    // it, panning to keep the fly in view: a spectator, not a chase camera. Moving the camera
-    // with the fly was tried and flew it straight through the flowers and fern.
-    let following = false;
+    // The orbit target tracks the thorax wherever the fly walks or flies, while the camera stays
+    // where the user put it, panning to keep the fly in view: a spectator, not a chase camera.
+    // Moving the camera with the fly was tried and flew it straight through the flowers and fern.
     function stepFollow(dt: number) {
-      const flying = flight.state !== 'ground';
-      if (!flying && !following) return;
-      const target = flying ? followTarget() : homeTarget;
-      followDelta.copy(target).sub(controls.target).multiplyScalar(1 - Math.exp(-dt / 0.15));
-      controls.target.add(followDelta);
-      if (!flying && followDelta.lengthSq() < 1e-8) { controls.target.copy(homeTarget); following = false; }
-      else following = true;
+      followDelta.copy(followTarget()).sub(controls.target).multiplyScalar(1 - Math.exp(-dt / 0.25));
+      if (followDelta.lengthSq() > 1e-10) controls.target.add(followDelta);
     }
 
     const hemi = new THREE.HemisphereLight(0x9fc4ff, 0x1a2028, 1.15);
@@ -1368,7 +1413,8 @@ function stepSimulation() {
       const glassMeshes: THREE.Mesh[] = [];
       const solidMeshes: THREE.Mesh[] = [];
       const sack = propObjs['sugar_sack.glb'];
-      if (sack) sack.traverse(n => { if (n instanceof THREE.Mesh) solidMeshes.push(n); });
+      const sackMeshes: THREE.Mesh[] = [];
+      if (sack) sack.traverse(n => { if (n instanceof THREE.Mesh) sackMeshes.push(n); });
       if (terrarium) {
         // The tall fern is built from many short stacked segments, so no single mesh's own
         // span flags it as "tall" — filter by absolute height instead. Ground-level decor (the
@@ -1424,7 +1470,28 @@ function stepSimulation() {
           if (hit && hit.point.z < WORLD.floorZ + WORLD.floorBand) ok[j * n + i] = 1;
         }
         world.ground = { x0, y0, cell, n, ok };
+        // The sugar goes on open floor: the nearest cell to its nominal spot whose 5x5
+        // surroundings are all floor (a first placement put it half inside a rock), and its
+        // footprint then becomes an obstacle the feet stop at.
+        if (sack) {
+          let best: [number, number] | null = null, bd = Infinity;
+          for (let j = 2; j < n - 2; j++) for (let i = 2; i < n - 2; i++) {
+            let clear = true;
+            for (let dj = -2; dj <= 2 && clear; dj++) for (let di = -2; di <= 2; di++) if (ok[(j + dj) * n + i + di] !== 1) { clear = false; break; }
+            if (!clear) continue;
+            const cx = x0 + (i + 0.5) * cell, cy = y0 + (j + 0.5) * cell;
+            const dd = (cx - world.sugar.x) ** 2 + (cy - world.sugar.y) ** 2;
+            if (dd < bd) { bd = dd; best = [cx, cy]; }
+          }
+          if (best) { sack.position.x = best[0]; sack.position.y = best[1]; world.sugar.x = best[0]; world.sugar.y = best[1]; }
+          sack.updateMatrixWorld(true);
+          for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
+            const cx = x0 + (i + 0.5) * cell, cy = y0 + (j + 0.5) * cell;
+            if (Math.hypot(cx - world.sugar.x, cy - world.sugar.y) < world.sugar.r + 0.02) ok[j * n + i] = 0;
+          }
+        }
       }
+      solidMeshes.push(...sackMeshes);   // solid for the ball, after the sack has found its spot
       if (hillMeshes.length) {
         loadBall(scene, flyBox, hillMeshes, glassMeshes, solidMeshes).catch(err => console.warn('loadBall failed', err));
       }
@@ -1435,7 +1502,7 @@ function stepSimulation() {
     buildFlightMap();
     buildWorldMap();
     // Sugar comes from the world (the sack) unless the switch overrides it.
-    stimSwitch.sweet = 0; applyStim('sweet');
+    stimSwitch.sweet = 0; applyStim('sweet'); stimSwitch.sweetLeg = 0; applyStim('sweetLeg');
     $('b_world').onclick = (e) => {
       world.enabled = !world.enabled;
       if (e.currentTarget instanceof HTMLElement) {
@@ -1474,6 +1541,7 @@ function stepSimulation() {
       btn.onclick = () => {
         stimSwitch[k] = (stimSwitch[k] || 0) > 0 ? 0 : 1;
         applyStim(k);
+        if (k === 'sweet') { stimSwitch.sweetLeg = stimSwitch.sweet; applyStim('sweetLeg'); }   // infinite sugar: mouth and feet
         syncStimUI();
       };
     }
@@ -1705,7 +1773,7 @@ function stepSimulation() {
         const wl = world.levels;
         $('s_day').textContent = world.enabled ? `${(world.day * 100).toFixed(0)}% daylight` : 'off';
         $('s_sugar_d').textContent = world.sugar.placed ? `${world.sugarDist.toFixed(2)} cm` : '–';
-        $('s_wtaste').textContent = `${wl.sweet.toFixed(2)} / ${wl.odour.toFixed(2)}`;
+        $('s_wtaste').textContent = `${wl.sweet.toFixed(2)} / ${wl.sweetLeg.toFixed(2)} / ${wl.odour.toFixed(2)}`;
         $('s_wlight').textContent = `${wl.light.toFixed(2)} / ${wl.heat.toFixed(2)} / ${wl.cool.toFixed(2)}`;
         $('s_wloom').textContent = `${wl.looming.toFixed(2)} / ${wl.touch.toFixed(2)}`;
         $('s_steerside').textContent = flight.asym.toFixed(2);
@@ -1722,7 +1790,9 @@ function stepSimulation() {
                   : flight.state === 'takeoff' || flight.state === 'flight' ? 'In flight'
                   : flight.state === 'touchdown' && flight.flap === 0 && flight.fold === 0 ? 'Walking'
                   : flight.state !== 'ground' ? 'Landing'
-                  : world.enabled && world.levels.sweet > 0 ? 'Feeding' : '';
+                  : world.enabled && world.levels.sweet > 0 ? 'Feeding'
+                  : world.enabled && world.levels.sweetLeg > 0 ? 'Tasting with the feet'
+                  : flight.state === 'ground' && groom.active ? 'Grooming' : '';
       if (doing !== flightShown) {
         flightShown = doing;
         $('flight-state').hidden = doing === '';
@@ -1751,7 +1821,7 @@ function stepSimulation() {
                    applyBrain: () => applyBrainToActuators(brain, data), driveMap, shuffle, shuffleLegs,
                    stepSimulation, stimSwitch, stimPulse, applyStim, syncStimUI, poke, pokeBody, pokeAtScreen,
                    loom, startLoom, lighting, lights: { hemi, key, rim }, flight, FLIGHT, WALK,
-                   world, WORLD, walkable, nearestWalkable, stimWorld, stepWorld,
+                   world, WORLD, walkable, nearestWalkable, stimWorld, stepWorld, groom, GROOM,
                    sync: () => syncGeoms(model, data),
                    stepBall, get ball() { return ball; }, get ballWorld() { return ballWorld; },
                    dbg: () => ({ paused: sim.paused, acc, steps: sim.steps, time: data.time,

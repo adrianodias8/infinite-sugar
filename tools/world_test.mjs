@@ -35,7 +35,7 @@ const end = app.indexOf('// ----------------------------------------------------
 assert(start >= 0 && end > start, 'controller section must exist');
 vm.runInContext(app.slice(start, end) + `
 globalThis.controller = { resetSim, buildDriveMap, buildShuffleMap, buildFlightMap, buildWorldMap, stepSimulation,
-  stepWorld, world, WORLD, flight, stimWorld, poke, walkable, nearestWalkable };`, context);
+  stepWorld, world, WORLD, flight, stimWorld, poke, walkable, nearestWalkable, stepGroom, groom };`, context);
 const c = context.controller;
 c.resetSim(); c.buildDriveMap(model, brain); c.buildShuffleMap(); c.buildFlightMap(); c.buildWorldMap();
 const w = c.world, W = c.WORLD;
@@ -53,16 +53,26 @@ assert(brain.rate.orn_l > 5 * Math.max(1, brain.rate.orn_r), 'left odour drives 
 brain.setStimLR('odour', 0, 0);
 brain.step(300);
 
-// 2. Sugar by contact: the sack under the head is tasted and smelled; far away it is neither.
+// 2. Sugar by contact: a sack whose surface the labellum touches is tasted, the feet taste at
+// its base, it is smelled; far away it is none of these.
 advance(0.5);
 const [hx, hy] = head();
-w.sugar = { x: hx, y: hy, r: 0.06, placed: true };
+const lab = mujoco.mj_name2id(model, 1, 'labrum_left');
+const tip = [data.xpos[lab * 3], data.xpos[lab * 3 + 1]];
+w.sugar = { x: tip[0] + 0.15, y: tip[1], r: 0.14, placed: true };          // surface 0.01 from the labellum
 c.stepWorld(data, 0.001);
-assert.equal(lr('sweet')[0], 1, 'mouthparts over the sugar taste it');
-assert(w.levels.odour > 0.7 && lr('odour')[0] > 0.5 && lr('odour')[1] > 0.5, 'sugar under the head smells on both antennae');
+assert(lr('sweet')[0] > 0.6, `labellum against the sack tastes it (${lr('sweet')[0].toFixed(2)})`);
+assert(lr('sweetLeg')[0] > 0 && lr('sweetLeg')[0] < 1, `the front feet stand in the sugar at its base, the hind feet do not (${lr('sweetLeg')[0].toFixed(2)})`);
+assert(brain.sugar === lr('sweet')[0], 'the feeding counter follows the labellum, not the feet');
+assert(w.levels.odour > 0.6 && lr('odour')[0] > 0.5 && lr('odour')[1] > 0.5, 'sugar ahead smells on both antennae');
+const claw = mujoco.mj_name2id(model, 1, 'claw_T1_left');
+w.sugar = { x: data.xpos[claw * 3] + 0.10, y: data.xpos[claw * 3 + 1], r: 0.08, placed: true };   // base within footReach of a foot
+c.stepWorld(data, 0.001);
+assert(lr('sweetLeg')[0] > 0 && lr('sweetLeg')[0] <= 1, `a foot at the base tastes with the tarsus (${lr('sweetLeg')[0].toFixed(2)})`);
 w.sugar = { x: hx + 2.0, y: hy, r: 0.06, placed: true };
 c.stepWorld(data, 0.001);
 assert.equal(lr('sweet')[0], 0, 'nothing to taste two body lengths away');
+assert.equal(lr('sweetLeg')[0], 0, 'nor with the feet');
 assert.equal(w.levels.odour, 0, 'and nothing to smell beyond the odour range');
 // odour to the left lands on the left antenna
 w.sugar = { x: data.qpos[0], y: data.qpos[1] + 0.4, r: 0.06, placed: true };
@@ -70,9 +80,8 @@ c.stepWorld(data, 0.001);
 const od = lr('odour');
 console.log('sugar to the left', { odour: w.levels.odour.toFixed(2), left: od[0].toFixed(2), right: od[1].toFixed(2) });
 assert(od[0] > 0.3 && od[1] < 0.05, 'odour on the left antenna only');
-// feeding: sugar under the head drives the proboscis through the real wiring
-w.sugar = { x: hx, y: hy, r: 0.06, placed: true };
-const restProb = brain.rate.mn_proboscis;
+// feeding: the labellum on the sack drives the proboscis through the real wiring
+w.sugar = { x: tip[0] + 0.15, y: tip[1], r: 0.14, placed: true };
 advance(1.5);
 console.log('feeding', { proboscis: brain.rate.mn_proboscis.toFixed(1), rest: brain.rest.mn_proboscis.toFixed(1), counter: brain.sugarFeedSpikes });
 assert(brain.rate.mn_proboscis > brain.rest.mn_proboscis, 'the sack drives the feeding motor neurons');
@@ -118,5 +127,23 @@ w.enabled = true;
 assert(c.walkable(0, 0) && !c.walkable(2, 2));
 const [nx, ny] = c.nearestWalkable(2, 2);
 assert(c.walkable(nx, ny), 'nearest walkable point is walkable');
+
+// 7. Grooming: DNg11 above its rest while standing lifts and rubs the front legs; quiet, never.
+c.flight.enabled = false;
+const femurT1 = mujoco.mj_name2id(model, 19, 'femur_T1_left'), swingT1 = mujoco.mj_name2id(model, 19, 'coxa_twist_T1_left');
+const hold = [data.ctrl[femurT1], data.ctrl[swingT1]];
+const groomer = { rate: { dn_groom: 60 }, rest: { dn_groom: 22 } };
+for (let i = 0; i < 400; i++) c.stepGroom(groomer, data, 0.001);
+assert(c.groom.active && c.groom.count === 1, 'a raised DNg11 starts a grooming bout');
+let maxLift = 0, maxSwing = 0;
+for (let i = 0; i < 500; i++) { c.stepGroom(groomer, data, 0.001); maxLift = Math.max(maxLift, Math.abs(data.ctrl[femurT1] - hold[0])); maxSwing = Math.max(maxSwing, Math.abs(data.ctrl[swingT1] - hold[1])); }
+console.log('grooming', { lift: maxLift.toFixed(3), swing: maxSwing.toFixed(3) });
+assert(maxLift > 0.1 && maxSwing > 0.2, 'front leg lifts (to the femur control limit) and rubs');
+for (let i = 0; i < 1500; i++) c.stepGroom(groomer, data, 0.001);
+assert(!c.groom.active || c.groom.count >= 2, 'bouts end');
+const quiet = { rate: { dn_groom: 22 }, rest: { dn_groom: 22 } };
+c.groom.active = false; c.groom.cooldown = 0; c.groom.ema = 22; const count = c.groom.count;
+for (let i = 0; i < 2000; i++) c.stepGroom(quiet, data, 0.001);
+assert.equal(c.groom.count, count, 'a resting DNg11 never grooms');
 assert(Array.from(data.qpos).every(Number.isFinite) && Array.from(brain.v).every(Number.isFinite), 'finite');
-console.log('PASS: side pools, one-sided drive, sugar by contact and smell, lateral odour, feeding at the sack, daylight, shade, lateral looming, receding object, ball touch, world off, walkable floor');
+console.log('PASS: side pools, one-sided drive, labellar and tarsal sugar by contact, smell, lateral odour, feeding at the sack, daylight, shade, lateral looming, receding object, ball touch, world off, walkable floor, grooming');

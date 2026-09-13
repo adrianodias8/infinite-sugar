@@ -41,7 +41,7 @@ if "--lateral" in sys.argv:
 else:
     OUTS=["mn_proboscis","mn_neck","mn_antenna","dn_gf","dn_escwing","dn_steer","dn_walk","dn_groom","pam"]
 if "--lateral" not in sys.argv:
-  INS=[("(none)",[]),("sweet",["grn_sweet","grn_sweet_leg"]),("bitter",["grn_bitter"]),
+  INS=[("(none)",[]),("sweet",["grn_sweet","grn_sweet_leg"]),("sweet leg",["grn_sweet_leg"]),("sweet lab",["grn_sweet"]),("bitter",["grn_bitter"]),
      ("odour",["orn"]),("touch",["mechano"]),("thermo",["thermo"]),
      ("heat 1x",["thermo_hot"]),("heat 2.5x",["thermo_hot"],2.5),   # hot cells are tonically inhibited; see brain.ts stimGain
      ("cold",["thermo_cold"]),("cool",["thermo_cold","hygro_cool"]),

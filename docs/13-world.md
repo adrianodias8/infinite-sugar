@@ -7,8 +7,8 @@ Run 2026-09-13. `npm test` runs `tools/world_test.mjs` and the walking checks in
 
 Until now every sense was a switch and the terrarium sent nothing to the brain. Now the terrarium
 is the source of the senses, the switches are overrides, and where the fly goes is decided by
-its own descending neurons. Sugar is off by default: it is a sack on the floor, and the fly has
-to get there.
+its own descending neurons. Sugar is off by default: it is a sack on the floor, placed on the
+nearest open floor to a spot a short walk ahead of the perch, and the fly has to get there.
 
 Nothing in the world is a claim about the fly's brain. It is the environment, made explicit,
 feeding the same populations the switches drive — at the levels the environment gives them.
@@ -53,12 +53,24 @@ Three things fell out of the wiring, none of them written by us:
 
 | sense | source | level |
 |---|---|---|
-| sweet | the sugar sack: mouthparts within 0.05 cm of the spilled patch (patch = the sack's footprint + 0.05) or feet standing in it | labellar 1, or 0.6 × the fraction of feet in it |
+| sweet (labellar) | the labellum touching the sack's surface: within 0.03 cm of its footprint | 1 in contact, falling to 0 over 0.03 |
+| sweetLeg (tarsal) | feet in the sugar at the sack's base, within 0.04 cm of its footprint | the fraction of the six feet in it |
 | odour | distance from the head to the patch, on the antenna facing it | 0.8 at the patch, zero 0.8 cm beyond it |
 | light | a 120 s day, starting at noon; anything between the fly and the sun shades it | 0.35 × daylight × (1 − shade) |
 | heat / cool / damp | the same day | hot cells above 65 % daylight, cold, cooling and hygrosensory cells below 35 % |
 | looming | the beach ball, by time to collision from its real position and velocity, on the eye it approaches; the loom sphere by its own event | 1 − τ/0.6 s, scaled by angular size, within 1.2 cm |
 | touch | the ball hitting the fly (cannon-es contact), on that flank; a tap | the poke pulse |
+
+**Tasting is by contact, and the reflex is not there.** Labellar and tarsal sugar sensing are
+now separate channels (`grn_sweet`, 129 cells; `grn_sweet_leg`, 74). Measured, the labellum
+hangs 0.05 cm under the head and the proboscis extends it only 0.02 further down, so from a
+standing body it never reaches the floor; it tastes the sack by touching its side. Real flies
+find sugar with their feet and the tarsal input triggers proboscis extension. Measured in this
+wiring (NumPy reference), labellar drive alone raises the proboscis motor neurons +205 %, while
+tarsal drive alone *lowers* them 45 %, and both together give the +103 % reported before. There
+is no proboscis-extension reflex from the feet in this model, and none is faked: the fly tastes
+with its feet at the sack's base, and feeds only when it faces the sack and its labellum meets
+the surface. The Sugar switch still drives both channels.
 
 The light cap: 11,426 visual neurons driven flat out triple the whole-brain rate, and real
 photoreceptors adapt to steady light, which this model cannot (adaptation is ruled out by
@@ -79,7 +91,17 @@ Every level is brain-tick state, so a slow device still feeds the same world to 
 
 Supplied, and not claims about the fly: a tripod stepping cycle at 2.2 Hz with the body carried
 at 0.22 cm/s (0.13 backward) 0.006 cm above its stance, the 24 Hz wingbeat, airspeed, cruise
-height, bank, the leg tuck, wall avoidance, and the landing approach. Walking stays on the
+height, bank, the leg tuck, wall avoidance, and the landing approach. In the stepping cycle each
+foot lifts through its swing half while its fore-aft joint carries it forward, and is planted
+through its stance half while that joint carries it back, so stance feet stay put under the
+moving body instead of sliding. The fore-aft joints were measured on a lifted foot: coxa twist
+for the front and middle legs (±0.3 rad moves the foot 0.014–0.05 fore-aft), femur twist with
+the opposite sign for the hind legs.
+
+**Grooming** is a further command mapping: DNg11 (`dn_groom`) is the identified antennal-grooming
+descending neuron and rises under touch (22.9 → 33.8 Hz). When its 200 ms mean exceeds 1.35 ×
+its calibrated rest while the fly stands, the front legs lift and rub forward over the head for
+0.9 s at 4 Hz (the motion is ours); a quiet DNg11 never grooms. Walking stays on the
 walkable floor: a 56 × 56 map sampled at load from the terrarium's own opaque meshes (floor
 hits between −0.10 and +0.10; the hill, rocks, plants, frame and the sack are obstacles). A
 bout that meets an obstacle is spent turning toward open floor (supplied), so the next bout can
@@ -89,9 +111,10 @@ the standing pose over loaded legs, as before.
 ## Measured
 
 `tools/world_test.mjs`, real brain and body: odour on the left only drives the left ORNs (148 vs
-3 Hz); the sack under the head is tasted (level 1) and smelled on both antennae, two body lengths
-away neither; a sack to the left is smelled on the left antenna only (0.46 / 0.00); sugar at the
-head drives the feeding motor neurons (10.8 → 28.9 Hz) and the counter; noon lights and warms,
+3 Hz); a sack whose side the labellum touches is tasted and smelled on both antennae, a foot at
+its base tastes with the tarsus, two body lengths away neither; a sack to the left is smelled on
+the left antenna only (0.46 / 0.00); the labellum on the sack drives the feeding motor neurons
+and the counter; a raised DNg11 lifts and rubs the front legs and a resting one never does; noon lights and warms,
 midnight is dark, cold and damp; an object between the fly and the sun shades it to zero; a ball
 closing from the left looms on the left eye only (0.50 / 0.00) and a receding ball not at all; a
 bump from the ball is a touch on that flank and releases; switching the world off clears every

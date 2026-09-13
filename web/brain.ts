@@ -121,7 +121,12 @@ export class Brain {
     // Response of every motor pool to each of these was measured before wiring:
     // see tools/response_matrix.py and docs/05-results-phase1-3.md.
     this.STIM = {
-      sweet:   ['grn_sweet', 'grn_sweet_leg'],
+      // Labellar and tarsal sugar sensing are separate channels: the world drives the feet
+      // from the sugar under them and the labellum only by contact. Measured: labellar drive
+      // alone raises the proboscis MNs +205%, tarsal drive alone LOWERS them 45% (no
+      // proboscis-extension reflex from the feet in this wiring); the Sugar switch drives both.
+      sweet:    ['grn_sweet'],
+      sweetLeg: ['grn_sweet_leg'],
       bitter:  ['grn_bitter'],
       odour:   ['orn'],
       touch:   ['mechano'],
@@ -202,7 +207,7 @@ export class Brain {
       const extra = Math.abs(l - r);
       for (const p of sides[l > r ? 0 : 1]) { const g = this.groups[p]; if (g) this._active.push({ idx: g, amt: extra * gain }); }
     }
-    this.sugar = this.stim.sweet;
+    this.sugar = this.stim.sweet;   // the counter counts feeding: labellar sugar, not the feet
   }
 
   // Spikes in a pool during the last millisecond stepped (0 for an unknown pool).

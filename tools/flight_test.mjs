@@ -34,7 +34,7 @@ const end = app.indexOf('// ----------------------------------------------------
 assert(start >= 0 && end > start, 'controller section must exist');
 vm.runInContext(app.slice(start, end) + `
 globalThis.controller = { resetSim, buildDriveMap, buildShuffleMap, buildFlightMap, buildWorldMap, stepSimulation, stepFlight,
-  flight, FLIGHT, WALK, shuffle, stimPulse, world, walkable, get wings() { return wingJoints; } };`, context);
+  flight, FLIGHT, WALK, shuffle, stimPulse, world, walkable, get wings() { return wingJoints; }, get hold() { return holdCtrl; } };`, context);
 const c = context.controller;
 c.resetSim(); c.buildDriveMap(model, brain); c.buildShuffleMap(); c.buildFlightMap(); c.buildWorldMap();
 c.world.enabled = false;   // the senses here are scripted; tools/world_test.mjs covers the world
@@ -115,10 +115,16 @@ advance(0.4);                                                 // the real brain 
 const walked = (data.qpos[0] - x0) * Math.cos(yawA) + (data.qpos[1] - y0) * Math.sin(yawA);
 console.log('walk', { state: f.state, walked: walked.toFixed(3), bouts: f.walk.count, z: data.qpos[2].toFixed(3) });
 assert(walked > 0.04, 'walks forward along its heading');
+// the stride: the fore-aft joints sweep while walking and rest at their hold targets when not
+const swingAi = mujoco.mj_name2id(model, 19, 'coxa_twist_T2_left');
+let swMin = Infinity, swMax = -Infinity;
+for (let i = 0; i < 5000; i++) { c.stepSimulation(); swMin = Math.min(swMin, data.ctrl[swingAi]); swMax = Math.max(swMax, data.ctrl[swingAi]); }
+assert(swMax - swMin > 0.5, `the middle leg strides fore-aft (${(swMax - swMin).toFixed(2)} rad)`);
 assert(Math.abs(f.yawRate) < 0.8, 'steering at the calibrated rest wanders rather than circles');
 for (let t = 0; t < 400 && f.state !== 'ground'; t++) advance(0.01);
 assert.equal(f.state, 'ground', 'the bout ends on the ground');
 assert(Math.abs(data.qpos[2] - standZ) < 0.02, 'standing height after walking');
+assert(Math.abs(data.ctrl[swingAi] - c.hold[swingAi]) < 1e-9, 'the stride joint returns to its standing target');
 f.enabled = true;
 // backward and turning
 c.stepFlight(stepper(0, 1, 105, 53), data, 0.001);
