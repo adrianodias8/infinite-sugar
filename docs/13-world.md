@@ -88,6 +88,7 @@ DNs +17 %; nothing that moves a joint on its own, which is the honest result.
 | looming | the beach ball, by time to collision from its real position and velocity, on the eye it approaches; the loom sphere by its own event | 1 − τ/0.6 s, scaled by angular size, within 1.2 cm |
 | object (LC11) | a small object crossing the view, by its angular velocity about the fly, on that side | (ω / 2 rad/s), fading as it fills the view, within 1.5 cm |
 | touch | the ball hitting the fly (cannon-es contact), on that flank; a tap | the poke pulse |
+| bitter | the labellum against foliage or a flower (plant cells of the floor map, found by the glTF's material colours) | 1 in contact |
 
 **Tasting is by contact, and the reflex is not there.** Labellar and tarsal sugar sensing are
 now separate channels (`grn_sweet`, 129 cells; `grn_sweet_leg`, 74). Measured, the labellum
@@ -102,7 +103,19 @@ the surface. The Sugar switch still drives both channels.
 
 The light cap: 11,426 visual neurons driven flat out triple the whole-brain rate, and real
 photoreceptors adapt to steady light, which this model cannot (adaptation is ruled out by
-design). A fractional level is the explicit stand-in. Bitter has no world source.
+design). A fractional level is the explicit stand-in. The plants are the bitter source: the
+flowers, the foliage and the fern are told apart from the hill by the glTF's material colours
+(every mesh in this export is auto-named), and a labellum in a plant cell drives the bitter GRNs
+(labellar only; FAFB has no leg bitter pool). Measured: proboscis −55 %, giant fiber +25 %, so a
+fly that walks into the flowers pulls its mouthparts in.
+
+**The folded wing rests on the hind tibia.** Re-measured with the whole body standing across six
+resting wing biases: none inside the actuator band clears the wing from the hind leg (the roll
+joint saturates near 1.0 rad). Roll 0.0018 / yaw −0.0020 had the least neural-off jitter
+(0.022 rad/s against 0.058), but after a landing the tibia caught the more outward-swept
+membrane and held both wings forward at 0.56 rad instead of the folded 0.8–0.9. The original
+bias stays; the contact is real geometry and is left as it is. The honest fix is in the
+standing pose of the hind legs, not the wing mapping (see [polish](14-polish.md)).
 
 Every level is brain-tick state, so a slow device still feeds the same world to the same brain.
 
@@ -187,8 +200,8 @@ is the steering DNs' response to the odour on one antenna, which is real but sma
 
 ## Known limits
 
-- The world is what is modelled: no taste of the plants, no wind, no other flies. Bitter has
-  no source.
+- The world is what is modelled: no wind, no other flies, no water. A plant tastes bitter
+  wherever it stands in its cell, from the floor up.
 - The ground map is a height map: the fly walks around obstacles by stopping at them, and a
   flight can pass through the fern or the flowers.
 - Locomotion rates are those of this kernel. MDN being tonic here is a property of the model,

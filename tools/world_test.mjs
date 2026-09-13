@@ -35,7 +35,7 @@ const end = app.indexOf('// ----------------------------------------------------
 assert(start >= 0 && end > start, 'controller section must exist');
 vm.runInContext(app.slice(start, end) + `
 globalThis.controller = { resetSim, buildDriveMap, buildShuffleMap, buildFlightMap, buildWorldMap, stepSimulation,
-  stepWorld, world, WORLD, flight, stimWorld, poke, walkable, nearestWalkable, stepGroom, groom };`, context);
+  stepWorld, world, WORLD, flight, stimWorld, poke, walkable, nearestWalkable, plantAt, stepGroom, groom };`, context);
 const c = context.controller;
 c.resetSim(); c.buildDriveMap(model, brain); c.buildShuffleMap(); c.buildFlightMap(); c.buildWorldMap();
 const w = c.world, W = c.WORLD;
@@ -133,6 +133,21 @@ for (const k of Object.keys(w.levels)) assert.equal(w.levels[k], 0, `${k} cleare
 assert(Object.values(c.stimWorld).every(v => v[0] === 0 && v[1] === 0), 'world sources cleared');
 w.enabled = true;
 
+// 5b. Plants taste bitter: a ground map with a plant cell under the labellum drives the bitter GRNs.
+{
+  const n = 8, cell = 0.1, x0 = data.qpos[0] - 0.4, y0 = data.qpos[1] - 0.4;
+  const ok = new Uint8Array(n * n).fill(1), plant = new Uint8Array(n * n);
+  const i = Math.floor((tip[0] - x0) / cell), j = Math.floor((tip[1] - y0) / cell);
+  plant[j * n + i] = 1; ok[j * n + i] = 0;
+  w.ground = { x0, y0, cell, n, ok, plant };
+  c.stepWorld(data, 0.001);
+  assert(c.plantAt(tip[0], tip[1]) && lr('bitter')[0] === 1 && w.levels.bitter === 1, 'the labellum against a plant tastes bitter');
+  plant[j * n + i] = 0;
+  c.stepWorld(data, 0.001);
+  assert.equal(lr('bitter')[0], 0, 'no plant, no bitter');
+  w.ground = null;
+}
+
 // 6. Walkable floor: without the terrarium a disc round the perch; the nearest walkable point is inside it.
 assert(c.walkable(0, 0) && !c.walkable(2, 2));
 const [nx, ny] = c.nearestWalkable(2, 2);
@@ -156,4 +171,4 @@ c.groom.active = false; c.groom.cooldown = 0; c.groom.ema = 22; const count = c.
 for (let i = 0; i < 2000; i++) c.stepGroom(quiet, data, 0.001);
 assert.equal(c.groom.count, count, 'a resting DNg11 never grooms');
 assert(Array.from(data.qpos).every(Number.isFinite) && Array.from(brain.v).every(Number.isFinite), 'finite');
-console.log('PASS: side pools, one-sided drive, labellar and tarsal sugar by contact, smell, lateral odour, feeding at the sack, daylight, shade, lateral looming, receding object, crossing object on LC11, ball touch, world off, walkable floor, grooming');
+console.log('PASS: side pools, one-sided drive, labellar and tarsal sugar by contact, smell, lateral odour, feeding at the sack, daylight, shade, lateral looming, receding object, crossing object on LC11, ball touch, bitter plants, world off, walkable floor, grooming');

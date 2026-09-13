@@ -545,6 +545,10 @@ const WINGCLAMP = [-0.0055, 0.0105];   // measured usable band; past this the jo
 // ON TOP of whatever the neurons are doing — it shifts the resting posture without touching any
 // neural mapping, so every response above still plays out from the new rest position.
 // Signs follow the measured ctrl->angle curves: roll+ raises, yaw- sweeps outward.
+// Re-measured with the whole body standing (six bias pairs): no bias inside the actuator band
+// clears the folded wing from the hind tibia (roll saturates near 1.0 rad). Roll 0.0018 / yaw
+// -0.0020 had the least resting jitter, but after a landing the tibia caught the more
+// outward-swept membrane and held the wings forward at 0.56 rad, so these values stay.
 const WINGBIAS: Record<string, number> = {
   wing_roll_left:   0.0012, wing_roll_right:  0.0012,
   wing_yaw_left:   -0.0012, wing_yaw_right:  -0.0012,
@@ -871,7 +875,7 @@ const WORLD = {
   floorBand: 0.23,     // ground hits up to this far above floorZ count as walkable floor (the floor undulates to +0.10)
 };
 type Loomer = { x: number, y: number, z: number, vx: number, vy: number, vz: number, r: number, name: string };
-type GroundMap = { x0: number, y0: number, cell: number, n: number, ok: Uint8Array };
+type GroundMap = { x0: number, y0: number, cell: number, n: number, ok: Uint8Array, plant: Uint8Array };   // plant: a cell occupied by foliage or flowers
 const world = {
   enabled: true, t: 0, day: 1, shade: 0, sugarDist: 0,
   sugar: { x: 0.34, y: 0.08, r: 0.10, placed: false },   // refined from the sack's real footprint once it loads
@@ -879,7 +883,7 @@ const world = {
   loomers: [] as Loomer[],                               // written by main (ball) each frame
   touchHits: [] as number[],                             // bearings of contacts, queued by main
   ground: null as GroundMap | null,                      // walkable floor cells, sampled from the terrarium mesh
-  levels: { sweet:0, sweetLeg:0, odour:0, light:0, heat:0, cool:0, damp:0, looming:0, object:0, touch:0 },
+  levels: { sweet:0, sweetLeg:0, bitter:0, odour:0, light:0, heat:0, cool:0, damp:0, looming:0, object:0, touch:0 },
   headBody: -1, labrumBodies: [] as number[], clawBodies: [] as number[],
 };
 function buildWorldMap() {
@@ -898,6 +902,13 @@ function walkable(x: number, y: number) {
   const i = Math.floor((x - g.x0) / g.cell), j = Math.floor((y - g.y0) / g.cell);
   if (i < 0 || j < 0 || i >= g.n || j >= g.n) return false;
   return g.ok[j * g.n + i] === 1;
+}
+function plantAt(x: number, y: number) {
+  const g = world.ground;
+  if (!g) return false;
+  const i = Math.floor((x - g.x0) / g.cell), j = Math.floor((y - g.y0) / g.cell);
+  if (i < 0 || j < 0 || i >= g.n || j >= g.n) return false;
+  return g.plant[j * g.n + i] === 1;
 }
 function nearestWalkable(x: number, y: number): [number, number] {
   const g = world.ground;
@@ -952,6 +963,10 @@ function stepWorld(d: MjData, dt: number) {
     for (const b of world.labrumBodies) { tipX += d.xpos[b * 3] / world.labrumBodies.length; tipY += d.xpos[b * 3 + 1] / world.labrumBodies.length; }
   }
   const labellar = clamp(1 - (Math.hypot(tipX - S.x, tipY - S.y) - S.r) / WORLD.tasteReach, 0, 1);
+  // The plants taste bitter: the labellum against foliage or a flower drives the bitter GRNs
+  // (labellar only; FAFB has no leg bitter pool). Measured: proboscis -55%, giant fiber +25%.
+  L.bitter = plantAt(tipX, tipY) ? 1 : 0;
+  setWorld('bitter', L.bitter, L.bitter);
   let feet = 0;
   for (const b of world.clawBodies) if (Math.hypot(d.xpos[b * 3] - S.x, d.xpos[b * 3 + 1] - S.y) < S.r + WORLD.footReach) feet++;
   const tarsal = world.clawBodies.length ? feet / world.clawBodies.length : 0;
@@ -1486,14 +1501,28 @@ function stepSimulation() {
         // raycasts at load.
         const n = 56, span = 2 * flight.bounds.r, cell = span / n;
         const x0 = gcenter.x - span / 2, y0 = gcenter.y - span / 2;
-        const ok = new Uint8Array(n * n);
+        const ok = new Uint8Array(n * n), plant = new Uint8Array(n * n);
+        // Plants by the glTF's material colours (every mesh is auto-named): the flowers are
+        // f06193, the foliage and fern fronds 4bb150 and df9b45, and the small 8ec44b pieces
+        // are fern tips; the large 8ec44b mound is the hill.
+        const isPlant = (o: THREE.Object3D) => {
+          if (!(o instanceof THREE.Mesh)) return false;
+          const m = Array.isArray(o.material) ? o.material[0] : o.material;
+          if (!(m instanceof THREE.MeshStandardMaterial)) return false;
+          const c = m.color.getHexString();
+          if (c === 'f06193' || c === '4bb150' || c === 'df9b45') return true;
+          if (c !== '8ec44b') return false;
+          const bb = new THREE.Box3().setFromObject(o), sz = new THREE.Vector3(); bb.getSize(sz);
+          return Math.max(sz.x, sz.y) < 1.5;
+        };
         for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
           const x = x0 + (i + 0.5) * cell, y = y0 + (j + 0.5) * cell;
           if (Math.hypot(x - gcenter.x, y - gcenter.y) > flight.bounds.r - cell) continue;
           const hit = groundUnder(solidMeshes, x, y);
           if (hit && hit.point.z < WORLD.floorZ + WORLD.floorBand) ok[j * n + i] = 1;
+          else if (hit && isPlant(hit.object)) plant[j * n + i] = 1;
         }
-        world.ground = { x0, y0, cell, n, ok };
+        world.ground = { x0, y0, cell, n, ok, plant };
         // The sugar goes on open floor: the nearest cell to its nominal spot whose 5x5
         // surroundings are all floor (a first placement put it half inside a rock), and its
         // footprint then becomes an obstacle the feet stop at.
@@ -1798,7 +1827,7 @@ function stepSimulation() {
         const wl = world.levels;
         $('s_day').textContent = world.enabled ? `${(world.day * 100).toFixed(0)}% daylight` : 'off';
         $('s_sugar_d').textContent = world.sugar.placed ? `${world.sugarDist.toFixed(2)} cm` : '–';
-        $('s_wtaste').textContent = `${wl.sweet.toFixed(2)} / ${wl.sweetLeg.toFixed(2)} / ${wl.odour.toFixed(2)}`;
+        $('s_wtaste').textContent = `${wl.sweet.toFixed(2)} / ${wl.sweetLeg.toFixed(2)} / ${wl.bitter.toFixed(0)} / ${wl.odour.toFixed(2)}`;
         $('s_wlight').textContent = `${wl.light.toFixed(2)} / ${wl.heat.toFixed(2)} / ${wl.cool.toFixed(2)}`;
         $('s_wloom').textContent = `${wl.looming.toFixed(2)} / ${wl.object.toFixed(2)} / ${wl.touch.toFixed(2)}`;
         $('s_steerside').textContent = flight.asym.toFixed(2);
@@ -1816,6 +1845,7 @@ function stepSimulation() {
                   : flight.state === 'touchdown' && flight.flap === 0 && flight.fold === 0 ? 'Walking'
                   : flight.state !== 'ground' ? 'Landing'
                   : world.enabled && world.levels.sweet > 0 ? 'Feeding'
+                  : world.enabled && world.levels.bitter > 0 ? 'Tasting a plant'
                   : world.enabled && world.levels.sweetLeg > 0 ? 'Tasting with the feet'
                   : flight.state === 'ground' && groom.active ? 'Grooming' : '';
       if (doing !== flightShown) {
@@ -1846,7 +1876,7 @@ function stepSimulation() {
                    applyBrain: () => applyBrainToActuators(brain, data), driveMap, shuffle, shuffleLegs,
                    stepSimulation, stimSwitch, stimPulse, applyStim, syncStimUI, poke, pokeBody, pokeAtScreen,
                    loom, startLoom, lighting, lights: { hemi, key, rim }, flight, FLIGHT, WALK,
-                   world, WORLD, walkable, nearestWalkable, stimWorld, stepWorld, groom, GROOM,
+                   world, WORLD, walkable, nearestWalkable, plantAt, stimWorld, stepWorld, groom, GROOM,
                    sync: () => syncGeoms(model, data),
                    stepBall, get ball() { return ball; }, get ballWorld() { return ballWorld; },
                    dbg: () => ({ paused: sim.paused, acc, steps: sim.steps, time: data.time,
