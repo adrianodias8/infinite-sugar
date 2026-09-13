@@ -250,7 +250,7 @@ async function loadProps(scene: THREE.Scene, flyBox: THREE.Box3) {
       const box1 = new THREE.Box3().setFromObject(wrap);
       const size1 = new THREE.Vector3(); box1.getSize(size1);
       wrap.position.set(p.floor[0], p.floor[1], WORLD.floorZ - box1.min.z);
-      if (p.file === 'sugar_sack.glb') world.sugar = { x: p.floor[0], y: p.floor[1], r: 0.5 * Math.max(size1.x, size1.y), placed: true };   // r: the sack's surface
+      if (p.file === 'sugar_sack.glb') world.sugar = { x: p.floor[0], y: p.floor[1], r: 0.5 * Math.max(size1.x, size1.y), placed: true, amount: world.sugar.amount };   // r: the sack's surface
     } else {
       if (!p.pos) throw new Error(`prop "${p.file}" needs abs or pos coordinates`);
       const box1 = new THREE.Box3().setFromObject(wrap);  // re-measure post-scale, world origin
@@ -273,6 +273,7 @@ async function loadProps(scene: THREE.Scene, flyBox: THREE.Box3) {
 // low render framerate, rather than a hand-clamped frame delta.
 let ball: BallState | null = null;
 let ballWorld: CANNON.World | null = null;
+const ballTilt = { phase: 0 };
 const _ray = new THREE.Raycaster();      // still used once at load, to find the "hilltop" start
 const _down = new THREE.Vector3(0, 0, -1);
 function groundUnder(meshes: THREE.Object3D[], x: number, y: number) {
@@ -430,6 +431,12 @@ function stepBall(dt: number) {
     const bi = ball.thoraxBody * 3;
     ball.flyProxy.position.set(data.xpos[bi], data.xpos[bi + 1], data.xpos[bi + 2]);
   }
+  // The ball is alive: the floor tilts very slightly on a slow circular cycle (gravity leans
+  // 0.05 rad, once round every 45 s), so the ball keeps rolling somewhere and the fly gets
+  // recurring looming and touch events without a hand on the button. Supplied, and cosmetic.
+  ballTilt.phase += 2 * Math.PI * dt / 45;
+  const lean = 0.05, g = 1.6;
+  ballWorld.gravity.set(g * Math.sin(lean) * Math.cos(ballTilt.phase), g * Math.sin(lean) * Math.sin(ballTilt.phase), -g * Math.cos(lean));
   ballWorld.step(1 / 120, dt, 10);   // fixed-timestep sub-stepping — the engine's own tunneling fix
   ball.wrap.position.copy(ball.body.position);
   ball.wrap.quaternion.copy(ball.body.quaternion);
@@ -875,6 +882,16 @@ const WORLD = {
   dayPeriod: 120,      // seconds per day; the simulation starts at noon
   lightMax: 0.35,      // visual level in full daylight (see above)
   odourRange: 0.8,     // cm beyond the sugar at which the odour reaches zero
+  // A draught across the terrarium carries the odour downwind of the sack in a plume: full
+  // strength inside a cone that starts plumeWidth wide at the sack and widens by plumeSpread
+  // per cm downwind, and a fraction (upwind) of the still-air level elsewhere. The draught
+  // blows from the sack toward the perch, so a fly at the start is downwind of the sugar.
+  draught: [-0.97, -0.24] as [number, number],
+  plumeWidth: 0.12, plumeSpread: 0.35, upwind: 0.25,
+  antennaSpan: 0.035,  // each antenna samples the odour field this far to its side of the head centre
+  sugarEmpty: 180,     // seconds of feeding at full contact that empty the sack
+  sugarRefill: 600,    // seconds for an empty sack to fill again (it is refilled, slowly)
+  contrastGain: 0.05,  // visual level per unit brightness change per second (a passing shadow is a transient)
   tasteReach: 0.03,    // the labellum tastes within this of the sack's surface; the feet within footReach of its base
   footReach: 0.04,
   loomRange: 1.2, loomTau: 0.6,   // objects closer than loomRange on a collision course within loomTau seconds loom
@@ -886,7 +903,8 @@ type Loomer = { x: number, y: number, z: number, vx: number, vy: number, vz: num
 type GroundMap = { x0: number, y0: number, cell: number, n: number, ok: Uint8Array, plant: Uint8Array };   // plant: a cell occupied by foliage or flowers
 const world = {
   enabled: true, t: 0, day: 1, shade: 0, sugarDist: 0,
-  sugar: { x: 0.34, y: 0.08, r: 0.10, placed: false },   // refined from the sack's real footprint once it loads
+  bright: 1, contrast: 0,                                // brightness at the fly and its filtered rate of change
+  sugar: { x: 0.34, y: 0.08, r: 0.10, placed: false, amount: 1 },   // refined from the sack's real footprint once it loads; amount 0..1
   sun: [0, 0.69, 0.72],                                  // toward the key light
   loomers: [] as Loomer[],                               // written by main (ball) each frame
   touchHits: [] as number[],                             // bearings of contacts, queued by main
@@ -931,6 +949,16 @@ function nearestWalkable(x: number, y: number): [number, number] {
   }
   return best;
 }
+// The odour field at a point: the still-air fall-off with distance from the sack, shaped by
+// the draught into a downwind plume, scaled by how much sugar is left.
+function odourAt(x: number, y: number) {
+  const S = world.sugar, w = WORLD.draught;
+  const vx = x - S.x, vy = y - S.y, dist = Math.hypot(vx, vy);
+  const along = vx * w[0] + vy * w[1], perp = Math.abs(vx * w[1] - vy * w[0]);
+  const radial = clamp(1 - (dist - S.r) / WORLD.odourRange, 0, 1);
+  const plume = along >= 0 ? clamp(1 - (perp - S.r) / (WORLD.plumeWidth + WORLD.plumeSpread * along), 0, 1) : 0;
+  return 0.8 * S.amount * radial * Math.max(plume, WORLD.upwind);
+}
 function stepWorld(d: MjData, dt: number) {
   if (!world.enabled) {
     for (const k of Object.keys(world.levels)) { (world.levels as Record<string, number>)[k] = 0; setWorld(k, 0, 0); }
@@ -951,7 +979,13 @@ function stepWorld(d: MjData, dt: number) {
     shade = Math.max(shade, clamp(1 - (perp - o.r) / (0.5 * o.r + 1e-6), 0, 1));
   }
   world.shade = shade;
-  L.light = WORLD.lightMax * world.day * (1 - shade);
+  // Visual cells respond to change as much as to level: the capped ambient term plus a
+  // transient from the rate of change of brightness (a shadow's edge passing over the fly, the
+  // day's own slow ramp is negligible). The transient is a 50 ms filtered |d brightness / dt|.
+  const bright = world.day * (1 - shade);
+  world.contrast += (Math.abs(bright - world.bright) / dt - world.contrast) * Math.min(1, dt / 0.05);
+  world.bright = bright;
+  L.light = Math.min(1, WORLD.lightMax * bright + WORLD.contrastGain * world.contrast);
   L.heat = 0.5 * clamp((world.day - 0.65) / 0.35, 0, 1);
   L.cool = 0.5 * clamp((0.35 - world.day) / 0.35, 0, 1);
   L.damp = 0.3 * clamp((0.35 - world.day) / 0.35, 0, 1);
@@ -978,11 +1012,20 @@ function stepWorld(d: MjData, dt: number) {
   let feet = 0;
   for (const b of world.clawBodies) if (Math.hypot(d.xpos[b * 3] - S.x, d.xpos[b * 3 + 1] - S.y) < S.r + WORLD.footReach) feet++;
   const tarsal = world.clawBodies.length ? feet / world.clawBodies.length : 0;
-  L.sweet = labellar; L.sweetLeg = tarsal;
-  setWorld('sweet', labellar, labellar); setWorld('sweetLeg', tarsal, tarsal);
-  L.odour = 0.8 * clamp(1 - (dh - S.r) / WORLD.odourRange, 0, 1);
-  const od = lateral(L.odour, bearingTo(d, S.x, S.y));
-  setWorld('odour', od[0], od[1]);
+  // The sugar is finite: feeding (labellar contact) empties the sack over WORLD.sugarEmpty
+  // seconds and it refills slowly while nobody feeds, so the day has a story — find, feed,
+  // wander, find again. Taste and smell scale with what is left. A world property, not a
+  // brain one: the feeding counter simply stops when there is nothing to taste.
+  S.amount = clamp(S.amount + (labellar > 0 ? -labellar / WORLD.sugarEmpty : 1 / WORLD.sugarRefill) * dt, 0, 1);
+  L.sweet = labellar * S.amount; L.sweetLeg = tarsal * S.amount;
+  setWorld('sweet', L.sweet, L.sweet); setWorld('sweetLeg', L.sweetLeg, L.sweetLeg);
+  // Odour: each antenna samples the plume at its own position (the antenna nearer the plume's
+  // axis smells more), and the antenna facing the sack gets the larger share of it, as before.
+  const yaw = yawOf(d.qpos.subarray(3, 7)), sx = -Math.sin(yaw) * WORLD.antennaSpan, sy = Math.cos(yaw) * WORLD.antennaSpan;
+  const antL = odourAt(hx + sx, hy + sy), antR = odourAt(hx - sx, hy - sy);
+  const facing = lateral(1, bearingTo(d, S.x, S.y));
+  L.odour = odourAt(hx, hy);
+  setWorld('odour', facing[0] * antL, facing[1] * antR);
   // --- moving objects: looming by time to collision, on the eye they approach; and a small
   //     object crossing the view (angular velocity, not approach) for the LC11 detectors
   let lo = 0, ro = 0, ol = 0, or_ = 0; L.looming = 0; L.object = 0;
@@ -1683,6 +1726,15 @@ function stepSimulation() {
       if (scene.fog instanceof THREE.Fog) scene.fog.color.setRGB((0.80 + 0.12 * u) * day, (0.92 + 0.06 * u) * day, (0.94 + 0.04 * u) * day);
     }
 
+    // ---- the sack shows how much sugar is left: it slumps to half height as it empties
+    const sackScale = { z: -1 };
+    function stepSack() {
+      const sack = propObjs['sugar_sack.glb'];
+      if (!sack) return;
+      if (sackScale.z < 0) sackScale.z = sack.scale.z;
+      sack.scale.z = sackScale.z * (0.5 + 0.5 * world.sugar.amount);
+    }
+
     // ---- looming object: the visible cause of the escape response
     // A matte dark sphere rather than a disc: it reads the same from every camera angle and
     // casts a real shadow onto the fly as it arrives. It approaches from ahead and above, in
@@ -1876,7 +1928,7 @@ function stepSimulation() {
         $('s_escape').textContent = flight.escape.toFixed(0) + ' Hz';
         const wl = world.levels;
         $('s_day').textContent = world.enabled ? `${(world.day * 100).toFixed(0)}% daylight` : 'off';
-        $('s_sugar_d').textContent = world.sugar.placed ? `${world.sugarDist.toFixed(2)} cm` : '–';
+        $('s_sugar_d').textContent = world.sugar.placed ? `${world.sugarDist.toFixed(2)} cm · ${Math.round(world.sugar.amount * 100)} % left` : '–';
         $('s_wtaste').textContent = `${wl.sweet.toFixed(2)} / ${wl.sweetLeg.toFixed(2)} / ${wl.bitter.toFixed(0)} / ${wl.odour.toFixed(2)}`;
         $('s_wlight').textContent = `${wl.light.toFixed(2)} / ${wl.heat.toFixed(2)} / ${wl.cool.toFixed(2)}`;
         $('s_wloom').textContent = `${wl.looming.toFixed(2)} / ${wl.object.toFixed(2)} / ${wl.touch.toFixed(2)}`;
@@ -1885,6 +1937,7 @@ function stepSimulation() {
       $('s_cnt').textContent  = brain.sugarFeedSpikes.toLocaleString();
 
       if (!sim.paused) stepBall(wall);
+      stepSack();
       stepRipples(wall);
       stepLighting(wall);
       stepLoomDisc();

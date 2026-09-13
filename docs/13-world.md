@@ -80,10 +80,10 @@ DNs +17 %; nothing that moves a joint on its own, which is the honest result.
 
 | sense | source | level |
 |---|---|---|
-| sweet (labellar) | the labellum touching the sack's surface: within 0.03 cm of its footprint | 1 in contact, falling to 0 over 0.03 |
-| sweetLeg (tarsal) | feet in the sugar at the sack's base, within 0.04 cm of its footprint | the fraction of the six feet in it |
-| odour | distance from the head to the patch, on the antenna facing it | 0.8 at the patch, zero 0.8 cm beyond it |
-| light | a 120 s day, starting at noon; anything between the fly and the sun shades it | 0.35 × daylight × (1 − shade) |
+| sweet (labellar) | the labellum touching the sack's surface: within 0.03 cm of its footprint | 1 in contact, falling to 0 over 0.03, × the sugar left |
+| sweetLeg (tarsal) | feet in the sugar at the sack's base, within 0.04 cm of its footprint | the fraction of the six feet in it, × the sugar left |
+| odour | the plume: the still-air fall-off from the sack, carried downwind by a fixed draught (toward the perch) in a cone 0.12 cm wide at the sack widening by 0.35 per cm; a quarter of the still-air level elsewhere. Each antenna samples the field 0.035 cm to its side of the head, and the antenna facing the sack gets the larger share | 0.8 at the patch, zero 0.8 cm beyond it, × the sugar left |
+| light | a 120 s day, starting at noon; anything between the fly and the sun shades it; plus a transient from the rate of change of brightness (a shadow's edge passing) | 0.35 × daylight × (1 − shade) + 0.05 × \|d brightness/dt\| (50 ms filtered), capped at 1 |
 | heat / cool / damp | the same day | hot cells above 65 % daylight, cold, cooling and hygrosensory cells below 35 % |
 | looming | the beach ball, by time to collision from its real position and velocity, on the eye it approaches; the loom sphere by its own event | 1 − τ/0.6 s, scaled by angular size, within 1.2 cm |
 | object (LC11) | a small object crossing the view, by its angular velocity about the fly, on that side | (ω / 2 rad/s), fading as it fills the view, within 1.5 cm |
@@ -100,6 +100,24 @@ tarsal drive alone *lowers* them 45 %, and both together give the +103 % reporte
 is no proboscis-extension reflex from the feet in this model, and none is faked: the fly tastes
 with its feet at the sack's base, and feeds only when it faces the sack and its labellum meets
 the surface. The Sugar switch still drives both channels.
+
+**The sugar is finite.** Feeding at full labellar contact empties the sack in 180 s and an
+untouched sack refills in 600 s (a world property; the sack slumps to half height on screen
+as it empties). Taste and smell scale with what is left, so the feeding counter simply stops
+when there is nothing to taste, and the fly's day has a story: find, feed, wander, find again.
+
+**The odour is a plume.** A radial gradient smells the same from every direction; a real
+plume has a downwind axis. A fixed draught blows from the sack toward the perch, so a fly at
+the start is downwind of the sugar. Measured half a centimetre downwind on the axis: 0.36;
+the same distance upwind: 0.09; 0.12 cm off the axis the antenna nearer the axis smells more
+(0.31 against 0.23). The browser kernel still turns toward no smell (below), so the plume
+changes what the antennae report, not where the fly goes.
+
+**The ball is alive.** The floor under the ball leans 0.05 rad on a slow 45 s circle (the
+gravity vector in cannon-es, and nothing else), so the ball keeps rolling somewhere and the
+fly gets recurring looming and touch events without a hand on the button. Cosmetic and
+supplied; measured over 40 s of wall time it drifted 0.14 cm down the hill and stayed 1.1 cm
+from the centre, inside the glass.
 
 The light cap: 11,426 visual neurons driven flat out triple the whole-brain rate, and real
 photoreceptors adapt to steady light, which this model cannot (adaptation is ruled out by
@@ -164,9 +182,14 @@ the standing pose over loaded legs, as before.
 `tools/world_test.mjs`, real brain and body: odour on the left only drives the left ORNs (148 vs
 3 Hz); a sack whose side the labellum touches is tasted and smelled on both antennae, a foot at
 its base tastes with the tarsus, two body lengths away neither; a sack to the left is smelled on
-the left antenna only (0.46 / 0.00); the labellum on the sack drives the feeding motor neurons
-and the counter; a raised DNg11 lifts and rubs the front legs and a resting one never does; noon lights and warms,
-midnight is dark, cold and damp; an object between the fly and the sun shades it to zero; a ball
+the left antenna only (0.12 / 0.00, off the plume's axis); downwind of the sack the plume is
+four times the upwind level and the antenna nearer its axis smells more; the labellum on the
+sack drives the feeding motor neurons and the counter, and spends the sugar (0.992 left after
+1.5 s); a quick sack empties, is neither tasted nor smelled when empty, freezes the counter, and
+refills while nobody feeds; a raised DNg11 lifts and rubs the front legs and a resting one never
+does; noon lights and warms, midnight is dark, cold and damp; a shadow arriving over 0.1 s is a
+visual transient of 0.88 against the 0.35 daylight; an object between the fly and the sun
+shades it to zero; a ball
 closing from the left looms on the left eye only (0.50 / 0.00) and a receding ball not at all; a
 bump from the ball is a touch on that flank and releases; switching the world off clears every
 level.

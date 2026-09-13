@@ -87,19 +87,36 @@ is measured before it is trusted.
   plume has a downwind axis. Fix: a fixed "draught" direction across the terrarium, odour
   strongest downwind of the sack, with the level on each antenna from the angle to the plume
   axis. Verify: odour L/R differ by side of the axis in `tools/world_test.mjs`.
+  **Done**: `odourAt(x, y)` is the still-air fall-off shaped into a downwind cone (0.12 cm
+  wide at the sack, +0.35 per cm), a quarter of it elsewhere; each antenna samples the field
+  0.035 cm to its side and the antenna facing the sack keeps the larger share. Measured 0.5 cm
+  from the sack: 0.36 downwind on the axis, 0.09 upwind; 0.12 cm off the axis 0.31 / 0.23 with
+  the nearer antenna higher, both sides tested.
 - **The sugar should run out.** Sugar as a finite quantity that feeding depletes over minutes
   (a world property, not a brain one) makes the fly's day a story: find, feed, wander, find
   again as it is refilled. Verify: counter rate falls to zero as the sack empties.
+  **Done**: `world.sugar.amount` falls at labellar contact / 180 s and refills at 1 / 600 s;
+  taste and smell scale with it, the sack slumps to half height, Inspect shows the percentage.
+  Test: a 1 s sack empties in 2 s of feeding, taste and smell read 0, the counter freezes for
+  the next second, and it refills within 1.5 s of being left alone.
 - **Light should have contrast, not just level.** Visual cells respond to change. Fix: drive
   the visual level with the *rate of change* of brightness (shadow edges, the ball's shadow
   passing) added to the capped ambient term, both explicit. Verify: a passing shadow gives a
   visual transient larger than the ambient level.
+  **Done**: light = 0.35 × brightness + 0.05 × |d brightness / dt| (50 ms filtered), capped at
+  1. Measured: a shadow arriving over 0.1 s peaks at 0.88 against the 0.35 daylight; the day's
+  own ramp adds under 0.002. A jump in the clock is a jump in brightness (the tests let it
+  pass before reading the level).
 - **Night.** At night the walking DN asks for more steps (measured), which is backwards for a
   diurnal fly and is simply what this wiring does without a clock. Say so in About rather than
   hide it.
+  **Done**: one sentence in About's technical summary.
 - **The ball should be alive.** A nudge from the fly walking into it already works through the
   proxy; a gentle periodic roll (a tilt of the floor plane in cannon-es on a slow cycle) would
   give the fly recurring looming and touch events without a hand on the button.
+  **Done**: the cannon-es gravity vector leans 0.05 rad on a 45 s circle. Measured live over
+  40 s: the ball rolled 0.14 cm down the hill and stayed inside the glass (1.1 of 1.48 cm from
+  the centre). Not covered by `tools/world_test.mjs` (the ball's physics lives in the page).
 
 ## 4. Camera and presentation
 

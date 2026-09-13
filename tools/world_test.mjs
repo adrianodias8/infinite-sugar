@@ -59,44 +59,89 @@ advance(0.5);
 const [hx, hy] = head();
 const lab = mujoco.mj_name2id(model, 1, 'labrum_left');
 const tip = [data.xpos[lab * 3], data.xpos[lab * 3 + 1]];
-w.sugar = { x: tip[0] + 0.15, y: tip[1], r: 0.14, placed: true };          // surface 0.01 from the labellum
+w.sugar = { x: tip[0] + 0.15, y: tip[1], r: 0.14, placed: true, amount: 1 };   // surface 0.01 from the labellum
 c.stepWorld(data, 0.001);
 assert(lr('sweet')[0] > 0.6, `labellum against the sack tastes it (${lr('sweet')[0].toFixed(2)})`);
 assert(lr('sweetLeg')[0] > 0 && lr('sweetLeg')[0] < 1, `the front feet stand in the sugar at its base, the hind feet do not (${lr('sweetLeg')[0].toFixed(2)})`);
 assert(brain.sugar === lr('sweet')[0], 'the feeding counter follows the labellum, not the feet');
 assert(w.levels.odour > 0.6 && lr('odour')[0] > 0.5 && lr('odour')[1] > 0.5, 'sugar ahead smells on both antennae');
 const claw = mujoco.mj_name2id(model, 1, 'claw_T1_left');
-w.sugar = { x: data.xpos[claw * 3] + 0.10, y: data.xpos[claw * 3 + 1], r: 0.08, placed: true };   // base within footReach of a foot
+w.sugar = { x: data.xpos[claw * 3] + 0.10, y: data.xpos[claw * 3 + 1], r: 0.08, placed: true, amount: 1 };   // base within footReach of a foot
 c.stepWorld(data, 0.001);
 assert(lr('sweetLeg')[0] > 0 && lr('sweetLeg')[0] <= 1, `a foot at the base tastes with the tarsus (${lr('sweetLeg')[0].toFixed(2)})`);
-w.sugar = { x: hx + 2.0, y: hy, r: 0.06, placed: true };
+w.sugar = { x: hx + 2.0, y: hy, r: 0.06, placed: true, amount: 1 };
 c.stepWorld(data, 0.001);
 assert.equal(lr('sweet')[0], 0, 'nothing to taste two body lengths away');
 assert.equal(lr('sweetLeg')[0], 0, 'nor with the feet');
 assert.equal(w.levels.odour, 0, 'and nothing to smell beyond the odour range');
-// odour to the left lands on the left antenna
-w.sugar = { x: data.qpos[0], y: data.qpos[1] + 0.4, r: 0.06, placed: true };
+// odour to the left lands on the left antenna (off the plume's axis, so only the upwind fraction)
+w.sugar = { x: data.qpos[0] + 0.1, y: data.qpos[1] + 0.4, r: 0.06, placed: true, amount: 1 };
 c.stepWorld(data, 0.001);
 const od = lr('odour');
 console.log('sugar to the left', { odour: w.levels.odour.toFixed(2), left: od[0].toFixed(2), right: od[1].toFixed(2) });
-assert(od[0] > 0.3 && od[1] < 0.05, 'odour on the left antenna only');
+assert(od[0] > 0.05 && od[1] < 0.02, 'odour on the left antenna only');
+// the plume: downwind of the sack the odour is strongest along the draught's axis, and the
+// antenna nearer the axis smells more than the other (each samples the field where it is)
+const dr = W.draught, nrm = [-dr[1], dr[0]];   // downwind direction and its normal
+const yaw0 = Math.atan2(2 * (data.qpos[3] * data.qpos[6] + data.qpos[4] * data.qpos[5]), 1 - 2 * (data.qpos[5] ** 2 + data.qpos[6] ** 2));
+const antenna = (side) => [hx - Math.sin(yaw0) * W.antennaSpan * side, hy + Math.cos(yaw0) * W.antennaSpan * side];   // +1 left, -1 right
+for (const off of [0.12, -0.12]) {
+  // the sack 0.5 upwind of the head and `off` to the side of it: the head is downwind, off the axis
+  w.sugar = { x: hx - 0.5 * dr[0] + off * nrm[0], y: hy - 0.5 * dr[1] + off * nrm[1], r: 0.06, placed: true, amount: 1 };
+  c.stepWorld(data, 0.001);
+  const [l, r] = lr('odour');
+  const axisDist = (p) => Math.abs((p[0] - w.sugar.x) * nrm[0] + (p[1] - w.sugar.y) * nrm[1]);   // distance of a point from the plume axis
+  const nearer = axisDist(antenna(1)) < axisDist(antenna(-1)) ? 'left' : 'right';
+  console.log('plume', { off, odour: w.levels.odour.toFixed(3), left: l.toFixed(3), right: r.toFixed(3), nearerAxis: nearer });
+  assert(w.levels.odour > 0.2, 'downwind of the sack the plume is smelled at half a centimetre');
+  assert(Math.abs(l - r) > 0.01 * w.levels.odour, 'the two antennae smell different levels off the axis');
+  assert((l > r) === (nearer === 'left'), 'the antenna nearer the plume axis smells more');
+}
+w.sugar = { x: hx + 0.5 * dr[0], y: hy + 0.5 * dr[1], r: 0.06, placed: true, amount: 1 };   // the sack downwind of the head: upwind fraction only
+c.stepWorld(data, 0.001);
+const upwindLevel = w.levels.odour;
+w.sugar = { x: hx - 0.5 * dr[0], y: hy - 0.5 * dr[1], r: 0.06, placed: true, amount: 1 };   // on the axis, downwind
+c.stepWorld(data, 0.001);
+console.log('plume axis', { downwind: w.levels.odour.toFixed(3), upwind: upwindLevel.toFixed(3) });
+assert(w.levels.odour > 3 * upwindLevel, 'the plume is far stronger downwind of the sack than upwind of it');
 // feeding: the labellum on the sack drives the proboscis through the real wiring
-w.sugar = { x: tip[0] + 0.15, y: tip[1], r: 0.14, placed: true };
+w.sugar = { x: tip[0] + 0.15, y: tip[1], r: 0.14, placed: true, amount: 1 };
 advance(1.5);
-console.log('feeding', { proboscis: brain.rate.mn_proboscis.toFixed(1), rest: brain.rest.mn_proboscis.toFixed(1), counter: brain.sugarFeedSpikes });
+console.log('feeding', { proboscis: brain.rate.mn_proboscis.toFixed(1), rest: brain.rest.mn_proboscis.toFixed(1), counter: brain.sugarFeedSpikes, amount: w.sugar.amount.toFixed(3) });
 assert(brain.rate.mn_proboscis > brain.rest.mn_proboscis, 'the sack drives the feeding motor neurons');
 assert(brain.sugarFeedSpikes > 0, 'the counter counts feeding at the sack');
-w.sugar = { x: hx + 2.0, y: hy, r: 0.06, placed: true };
+assert(w.sugar.amount < 1 && w.sugar.amount > 0.99, 'feeding spends the sugar slowly');
+// the sugar runs out: with a quick sack, feeding empties it, taste and smell go with it, the
+// counter stops, and it refills while nobody feeds
+const savedEmpty = W.sugarEmpty, savedRefill = W.sugarRefill;
+W.sugarEmpty = 1; W.sugarRefill = 1;
+advance(2);
+const emptied = { amount: w.sugar.amount, sweet: w.levels.sweet, odour: w.levels.odour, counter: brain.sugarFeedSpikes };
+advance(1);
+console.log('sack emptied', { ...emptied, counterAfter: brain.sugarFeedSpikes });
+assert(emptied.amount < 0.01 && emptied.sweet === 0 && emptied.odour === 0, 'an empty sack is neither tasted nor smelled');
+assert.equal(brain.sugarFeedSpikes, emptied.counter, 'the feeding counter stops when the sugar is gone');
+w.sugar = { x: hx + 2.0, y: hy, r: 0.06, placed: true, amount: w.sugar.amount };
+advance(1.5);
+assert(w.sugar.amount > 0.99, 'the sack refills while nobody feeds');
+W.sugarEmpty = savedEmpty; W.sugarRefill = savedRefill;
 
 // 3. Daylight: noon lights and warms, midnight is dark, cold and damp; an occluder shades.
-w.t = 0; c.stepWorld(data, 0.001);
-assert(Math.abs(lr('light')[0] - W.lightMax) < 1e-6 && lr('heat')[0] > 0 && lr('cool')[0] === 0, 'noon');
-w.t = W.dayPeriod / 2; c.stepWorld(data, 0.001);
-assert(lr('light')[0] < 1e-6 && lr('cool')[0] > 0 && lr('damp')[0] > 0 && lr('heat')[0] === 0, 'midnight');
-w.t = 0;
-w.loomers = [{ x: data.qpos[0] + w.sun[0] * 0.3, y: data.qpos[1] + w.sun[1] * 0.3, z: data.qpos[2] + w.sun[2] * 0.3, vx: 0, vy: 0, vz: 0, r: 0.1, name: 'occluder' }];
-c.stepWorld(data, 0.001);
-assert(w.shade > 0.99 && lr('light')[0] < 1e-6, 'an object between the fly and the sun casts a shadow');
+// (a jump in time is a jump in brightness, which the visual cells see as a transient: let it pass)
+const ticks = (n) => { for (let i = 0; i < n; i++) c.stepWorld(data, 0.001); };
+w.t = 0; ticks(500);
+assert(Math.abs(lr('light')[0] - W.lightMax) < 1e-3 && lr('heat')[0] > 0 && lr('cool')[0] === 0, 'noon');
+w.t = W.dayPeriod / 2; ticks(500);
+assert(lr('light')[0] < 1e-3 && lr('cool')[0] > 0 && lr('damp')[0] > 0 && lr('heat')[0] === 0, 'midnight');
+w.t = 0; ticks(500);
+// a shadow's edge passing over the fly is a visual transient larger than the daylight level
+const occluder = (k) => [{ x: data.qpos[0] + w.sun[0] * 0.3 + (1 - k) * 0.4, y: data.qpos[1] + w.sun[1] * 0.3, z: data.qpos[2] + w.sun[2] * 0.3, vx: 0, vy: 0, vz: 0, r: 0.1, name: 'occluder' }];
+let lightPeak = 0;
+for (let i = 0; i <= 100; i++) { w.loomers = occluder(i / 100); c.stepWorld(data, 0.001); lightPeak = Math.max(lightPeak, lr('light')[0]); }   // the shadow arrives over 0.1 s
+console.log('shadow edge', { peak: lightPeak.toFixed(2), ambient: W.lightMax, shade: w.shade.toFixed(2) });
+assert(lightPeak > W.lightMax, 'a passing shadow gives a visual transient larger than the ambient level');
+ticks(500);
+assert(w.shade > 0.99 && lr('light')[0] < 1e-3, 'an object between the fly and the sun casts a shadow');
 
 // 4. Looming by approach geometry, on the eye it approaches; a receding object does not loom.
 const yaw = Math.atan2(2 * (data.qpos[3] * data.qpos[6] + data.qpos[4] * data.qpos[5]), 1 - 2 * (data.qpos[5] ** 2 + data.qpos[6] ** 2));
@@ -171,4 +216,4 @@ c.groom.active = false; c.groom.cooldown = 0; c.groom.ema = 22; const count = c.
 for (let i = 0; i < 2000; i++) c.stepGroom(quiet, data, 0.001);
 assert.equal(c.groom.count, count, 'a resting DNg11 never grooms');
 assert(Array.from(data.qpos).every(Number.isFinite) && Array.from(brain.v).every(Number.isFinite), 'finite');
-console.log('PASS: side pools, one-sided drive, labellar and tarsal sugar by contact, smell, lateral odour, feeding at the sack, daylight, shade, lateral looming, receding object, crossing object on LC11, ball touch, bitter plants, world off, walkable floor, grooming');
+console.log('PASS: side pools, one-sided drive, labellar and tarsal sugar by contact, smell, lateral odour, the plume, feeding at the sack, the sack running out and refilling, daylight, shade, a passing shadow, lateral looming, receding object, crossing object on LC11, ball touch, bitter plants, world off, walkable floor, grooming');
