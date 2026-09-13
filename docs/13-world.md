@@ -151,6 +151,12 @@ now spent turning toward open floor. A loom during that first run did not launch
 sphere came from its flank, drove one escape DN alone, and the mean of the two sides sat just
 under the trigger — hence the stronger-side rule above.
 
+After the contact rule, an unattended 20 s run: the fly walked from the perch to the sack's base
+in three bouts and stood with its front feet in the sugar at 6 s and again at 10 s ("Tasting with
+the feet"; the tarsal cells drove, the counter did not move, since it counts the labellum), then
+passed the sack on its right without turning to face it and walked on. Whether it turns to feed
+is the steering DNs' response to the odour on one antenna, which is real but small (R −22 %).
+
 ## Known limits
 
 - The world is what is modelled: no taste of the plants, no wind, no other flies. Bitter has
