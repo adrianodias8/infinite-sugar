@@ -55,6 +55,7 @@ body.is-paused .play-symbol{display:block}
 .sugar-dot{width:7px;height:7px;border:1px solid currentColor;border-radius:50%}
 .on .sugar-dot{background:currentColor}
 .inspect-button{justify-self:end}
+.flight-state{display:inline-flex;align-items:center;min-height:32px;padding:6px 12px;border:1px solid #ffffff38;border-radius:16px;background:#1b181fb8;font-size:12px;letter-spacing:.03em;color:#ddd4de}
 
 #boot{position:fixed;inset:0;z-index:9;background:#151218;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:28px}
 .boot-wordmark{font:italic 400 clamp(40px,9vw,76px)/1 var(--serif);letter-spacing:-2px;text-align:center;padding:0 20px}

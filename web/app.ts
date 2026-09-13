@@ -443,6 +443,7 @@ function resetSim() {
   mujoco.mj_forward(model, data);
   sim.steps = 0; sim.t0 = performance.now();
   sim.brainStartMs = brain.ms; // preserve the brain, restart the body's clock beneath it
+  flight.state = 'ground'; flight.escape = 0; flight.wallLoom = 0;
   resetShuffle();
 }
 
@@ -726,10 +727,249 @@ function stepLoom(dt: number) {
     loom.level *= Math.exp(-dt / LOOM.release);
     if (loom.t > passT + LOOM.fade) { loom.active = false; loom.level = 0; loom.d = LOOM.d0; }
   }
-  if (stimPulse.looming !== loom.level) { stimPulse.looming = loom.level; applyStim('looming'); }
+  applyLooming();
+}
+// The loom event and flight's wall proximity share the looming channel; the brain gets the max.
+function applyLooming() {
+  const level = Math.max(loom.level, flight.wallLoom);
+  if (stimPulse.looming !== level) { stimPulse.looming = level; applyStim('looming'); }
+}
+
+// ------------------------------------------------------------- flight
+// A COMMAND MAPPING, the weakest tier in this file, and deliberately the most visible one.
+// FAFB is brain-only: the wing motor neurons, the flight power muscles and the VNC flight
+// circuit are not in the dataset. What the brain contributes is real and measured:
+//
+//   takeoff  — DNp02/04/11 (dn_escwing), silent at rest, ~200 Hz under looming. A 100 ms mean
+//              of the two sides above FLIGHT.takeoffRate is the trigger, so a loom, a strong
+//              touch or anything else that drives the escape circuit launches the fly.
+//   steering — DNa01/DNa02 (dn_steer_l/r). Their documented function is asymmetric modulation
+//              of left/right wing amplitude, i.e. turning. Yaw rate is proportional to the
+//              left-right rate difference, and each wing's stroke amplitude follows its side.
+//              Their resting asymmetry (L ~70 Hz, R ~53 Hz) is real, so the fly circles left.
+//   landing  — the escape DNs return to 0 Hz when the threat passes; FLIGHT.quietSec of
+//              silence after FLIGHT.minFlightSec in the air ends the flight.
+//
+// Everything else is supplied and is NOT a claim about the fly: the wingbeat (a stylized 24 Hz
+// flap; a real 200 Hz stroke is invisible at 60 fps), the airspeed, altitude band, bank into
+// turns, the legs tucking, the soft wall avoidance, and the return to the perch to land.
+// Root motion is kinematic: the free joint's qpos/qvel are written every physics step, so the
+// body is carried rather than lifted by any force; legs, head, proboscis, antennae and abdomen
+// keep simulating under their own neural drive throughout. This relaxes the ground rule that
+// nothing translates the root (see the shuffle note above) for the duration of a flight only;
+// on landing the root is released back to physics at the standing pose.
+type FlightState = 'ground' | 'takeoff' | 'flight' | 'landing' | 'settle' | 'touchdown';
+const FLIGHT = {
+  takeoffRate: 100,   // Hz, 100 ms mean of dn_escwing L/R
+  quietRate: 30,      // Hz, below which the escape DNs count as calm (0 at rest, ~200 escaping)
+  quietSec: 4, minFlightSec: 3,
+  speed: 0.5,         // cm/s, ~1.5 body lengths per second (stylized; the terrarium is small)
+  cruiseZ: 0.45, bobAmp: 0.05, bobHz: 0.35,
+  yawRate: 2.4,       // rad/s at full steering asymmetry
+  steerBand: 60,      // Hz of L-R difference that counts as full asymmetry
+  bank: 0.35, pitch: 0.15,
+  flapHz: 24, takeoffSec: 0.45, settleSec: 0.6, approachRadius: 0.12,
+  touchdownSec: 0.4, touchdownMax: 0.8,      // leg extension ramp onto the floor; hard stop
+  touchdownTuck: 0.12,                       // leg flexion that keeps the feet clear at the standing height
+  wall: 0.3,          // soft avoidance band inside the bounds
+  wallLoom: 0.2,      // looming level at the wall; measured escape response ~15 Hz, below quietRate,
+                      // so the glass makes the fly turn but cannot keep it airborne forever
+};
+const flight = {
+  enabled: true, state: 'ground' as FlightState, t: 0, escape: 0, quiet: 0, air: 0, count: 0,
+  x: 0, y: 0, z: 0, yaw: 0, vx: 0, vy: 0, vz: 0, roll: 0, pitch: 0, yawRate: 0,
+  asym: 0, tuck: 0, flap: 0, fold: 0, phase: 0, wallLoom: 0,   // fold: 0 stroke centre .. 1 folded rest
+  home: { x: 0, y: 0, z: 0, yaw: 0 },
+  settleFrom: 0,                   // height at which the settle descent began
+  wingFrom: [0, 0, 0, 0, 0, 0],   // wing joint angles at takeoff, blended into the stroke
+  weight: 0,                       // whole-body weight, for the touchdown handover
+  // Refined from the terrarium's real glass bounds once it loads; these defaults sit inside it.
+  bounds: { cx: -0.5, cy: -0.15, r: 1.25, zmin: 0.2, zmax: 0.95 },
+};
+type WingJoint = { qadr: number, dadr: number, side: 'l' | 'r', axis: 'yaw' | 'roll' | 'pitch' };
+// Stroke centre in flight, and the folded pose the wings are returned to before the root is
+// released on landing (measured resting angles under neural control; released from the flight
+// pose, the wing tips sat on the floor and against the hind legs and the weak springs could
+// not fold them back).
+const WING_STROKE = { yaw: 0.35, roll: 1.00, pitch: -0.70 };
+const WING_REST   = { yaw: 0.85, roll: 1.05, pitch: -0.90 };
+let wingJoints: WingJoint[] = [];
+function buildFlightMap() {
+  const thorax = mujoco.mj_name2id(model, 1 /* mjOBJ_BODY */, 'thorax');
+  flight.weight = model.body_subtreemass[thorax] * Math.abs(model.opt.gravity[2]);
+  wingJoints = [];
+  for (const side of ['left', 'right'] as const) for (const axis of ['yaw', 'roll', 'pitch'] as const) {
+    const ji = mujoco.mj_name2id(model, 3 /* mjOBJ_JOINT */, `wing_${axis}_${side}`);
+    if (ji < 0) throw new Error(`missing wing joint wing_${axis}_${side}`);
+    wingJoints.push({ qadr: model.jnt_qposadr[ji], dadr: model.jnt_dofadr[ji], side: side[0] as 'l' | 'r', axis });
+  }
+}
+const clamp = (v: number, lo: number, hi: number) => v < lo ? lo : v > hi ? hi : v;
+const smoothstep = (u: number) => { u = clamp(u, 0, 1); return u * u * (3 - 2 * u); };
+const wrapAngle = (a: number) => Math.atan2(Math.sin(a), Math.cos(a));
+// Quaternions as [w, x, y, z], MuJoCo's convention.
+function qmul(a: number[], b: number[]) {
+  return [a[0]*b[0] - a[1]*b[1] - a[2]*b[2] - a[3]*b[3],
+          a[0]*b[1] + a[1]*b[0] + a[2]*b[3] - a[3]*b[2],
+          a[0]*b[2] - a[1]*b[3] + a[2]*b[0] + a[3]*b[1],
+          a[0]*b[3] + a[1]*b[2] - a[2]*b[1] + a[3]*b[0]];
+}
+const qaxis = (x: number, y: number, z: number, a: number) => [Math.cos(a / 2), x * Math.sin(a / 2), y * Math.sin(a / 2), z * Math.sin(a / 2)];
+function yawOf(q: ArrayLike<number>) {   // heading of the body +x axis
+  const w = q[0], x = q[1], y = q[2], z = q[3];
+  return Math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z));
+}
+
+function startFlight(d: MjData) {
+  flight.home = { x: d.qpos[0], y: d.qpos[1], z: d.qpos[2], yaw: yawOf(d.qpos.subarray(3, 7)) };
+  flight.wingFrom = wingJoints.map(w => d.qpos[w.qadr]);
+  flight.x = d.qpos[0]; flight.y = d.qpos[1]; flight.z = d.qpos[2]; flight.yaw = flight.home.yaw;
+  flight.vx = flight.vy = flight.vz = 0; flight.roll = flight.pitch = flight.yawRate = 0;
+  flight.tuck = 0; flight.flap = 0; flight.fold = 0; flight.wallLoom = 0;
+  flight.state = 'takeoff'; flight.t = 0; flight.air = 0; flight.quiet = 0; flight.count++;
+}
+function endFlight(d: MjData) {
+  // Release the root to physics where touchdown left it: level, over the perch, legs loaded.
+  const q = qaxis(0, 0, 1, flight.home.yaw);
+  for (let i = 0; i < 4; i++) d.qpos[3 + i] = q[i];
+  for (let i = 0; i < 6; i++) d.qvel[i] = 0;
+  flight.state = 'ground'; flight.wallLoom = 0; applyLooming();
+  resetShuffle();
+}
+
+// Brain-tick step (1 ms): the state machine, steering, and the flight path.
+function stepFlight(b: { rate: Record<string, number> }, d: MjData, dt: number) {
+  const escape = Math.max(0, ((b.rate.dn_escwing_l || 0) + (b.rate.dn_escwing_r || 0)) / 2);
+  flight.escape += (escape - flight.escape) * (dt / 0.1);
+  if (flight.state === 'ground') {
+    if (flight.enabled && neural && flight.escape > FLIGHT.takeoffRate) startFlight(d);
+    return;
+  }
+  flight.t += dt;
+  const steer = neural ? ((b.rate.dn_steer_l || 0) - (b.rate.dn_steer_r || 0)) / FLIGHT.steerBand : 0;
+  flight.asym += (clamp(steer, -1, 1) - flight.asym) * (dt / 0.15);
+  let speed = FLIGHT.speed, zTarget = FLIGHT.cruiseZ, yawRate = flight.asym * FLIGHT.yawRate;
+  const B = flight.bounds;
+
+  if (flight.state === 'takeoff') {
+    const u = smoothstep(flight.t / FLIGHT.takeoffSec);
+    flight.tuck = u; flight.flap = u;
+    speed = FLIGHT.speed * u; zTarget = flight.home.z + (FLIGHT.cruiseZ - flight.home.z) * u;
+    if (flight.t >= FLIGHT.takeoffSec) { flight.state = 'flight'; flight.air = 0; }
+  } else if (flight.state === 'flight') {
+    flight.air += dt;
+    zTarget = FLIGHT.cruiseZ + FLIGHT.bobAmp * Math.sin(2 * Math.PI * FLIGHT.bobHz * flight.air);
+    flight.quiet = flight.escape < FLIGHT.quietRate ? flight.quiet + dt : 0;
+    if (flight.air > FLIGHT.minFlightSec && flight.quiet > FLIGHT.quietSec) { flight.state = 'landing'; flight.t = 0; }
+  } else if (flight.state === 'landing') {
+    // Supplied: fly back over the perch and descend as it gets close.
+    const dx = flight.home.x - flight.x, dy = flight.home.y - flight.y, dist = Math.hypot(dx, dy);
+    const want = Math.atan2(dy, dx), err = wrapAngle(want - flight.yaw);
+    yawRate = clamp(err / 0.25, -1.2, 1.2) * FLIGHT.yawRate;
+    speed = FLIGHT.speed * clamp(0.3 + dist / 0.4, 0, 0.8);
+    zTarget = flight.home.z + 0.08 + Math.min(1, dist / 0.6) * (FLIGHT.cruiseZ - flight.home.z - 0.08);
+    if (dist < FLIGHT.approachRadius) { flight.state = 'settle'; flight.t = 0; flight.settleFrom = flight.z; }
+  } else if (flight.state === 'settle') {
+    // Sink from the approach height to the standing height over the perch. Order matters:
+    // the stroke stops and the legs unfold in the first half, while the body is still high
+    // and the wings are held raised at the stroke centre; the wings fold in the second half,
+    // over legs already in their standing configuration. (Descending while still beating put
+    // the wing tips on the floor; folding first let the extending hind legs sweep through
+    // the membranes and push the wings forward, where the weak springs could not recover.)
+    const u = smoothstep(flight.t / FLIGHT.settleSec);
+    const u1 = clamp(u * 2, 0, 1), u2 = clamp(u * 2 - 1, 0, 1);
+    flight.flap = 1 - u1; flight.tuck = 1 - (1 - FLIGHT.touchdownTuck) * u1; flight.fold = u2;
+    speed = 0; yawRate = 0;
+    const k = dt / 0.15;
+    flight.x += (flight.home.x - flight.x) * k; flight.y += (flight.home.y - flight.y) * k;
+    flight.yaw += wrapAngle(flight.home.yaw - flight.yaw) * k;
+    zTarget = flight.settleFrom + (flight.home.z - flight.settleFrom) * u;
+    if (flight.t >= FLIGHT.settleSec) { flight.state = 'touchdown'; flight.t = 0; }
+  } else if (flight.state === 'touchdown') {
+    // Standing in reverse: the root stays pinned at the standing height while the legs extend
+    // slowly onto the floor, and the root is handed back once the constraint force on its
+    // vertical dof shows the legs carrying the body's weight — a static equilibrium, so
+    // nothing is stored to launch it. (Unloaded servo legs stand taller than the loaded
+    // stance: pinning with the legs at their targets drove the feet into the very stiff floor
+    // and threw the body on release; releasing above the floor dropped it onto splayed feet,
+    // a lower stance where the folded wing tips touched the floor.)
+    flight.x = flight.home.x; flight.y = flight.home.y; flight.yaw = flight.home.yaw;
+    flight.tuck = FLIGHT.touchdownTuck * Math.max(0, 1 - flight.t / FLIGHT.touchdownSec);
+    flight.flap = 0; speed = 0; yawRate = 0; flight.roll = flight.pitch = 0;
+    zTarget = flight.home.z;
+    const carried = flight.t > 0.1 && d.qfrc_constraint[2] >= flight.weight;
+    if (carried || flight.t >= FLIGHT.touchdownMax) { endFlight(d); return; }
+  }
+
+  // Soft wall avoidance (supplied) plus a looming pulse proportional to proximity, so the
+  // brain's own escape circuit also sees the wall coming.
+  const rx = flight.x - B.cx, ry = flight.y - B.cy, rc = Math.hypot(rx, ry);
+  const prox = clamp((rc - (B.r - FLIGHT.wall)) / FLIGHT.wall, 0, 1);
+  if (prox > 0 && flight.state !== 'settle') {
+    const inward = Math.atan2(-ry, -rx), err = wrapAngle(inward - flight.yaw);
+    if (Math.abs(err) > 0.35) yawRate += Math.sign(err) * prox * FLIGHT.yawRate;
+  }
+  flight.wallLoom = FLIGHT.wallLoom * prox * prox; applyLooming();
+
+  flight.yawRate += (yawRate - flight.yawRate) * (dt / 0.12);
+  flight.yaw = wrapAngle(flight.yaw + flight.yawRate * dt);
+  flight.vx = speed * Math.cos(flight.yaw); flight.vy = speed * Math.sin(flight.yaw);
+  flight.x += flight.vx * dt; flight.y += flight.vy * dt;
+  const rx2 = flight.x - B.cx, ry2 = flight.y - B.cy, rc2 = Math.hypot(rx2, ry2);
+  if (rc2 > B.r) { flight.x = B.cx + rx2 / rc2 * B.r; flight.y = B.cy + ry2 / rc2 * B.r; }
+  const z0 = flight.z;
+  flight.z += (clamp(zTarget, Math.min(B.zmin, flight.home.z), B.zmax) - flight.z) * (dt / 0.35);
+  if (flight.state === 'takeoff' || flight.state === 'settle' || flight.state === 'touchdown') flight.z = zTarget;   // exact lift-off and touchdown curves
+  flight.vz = (flight.z - z0) / dt;
+  const rollTarget = -FLIGHT.bank * clamp(flight.yawRate / FLIGHT.yawRate, -1, 1);
+  flight.roll += (rollTarget - flight.roll) * (dt / 0.25);
+  flight.pitch += (FLIGHT.pitch * (speed / FLIGHT.speed) - flight.pitch) * (dt / 0.3);
+}
+
+// Physics-step write (0.1 ms): root pose and the wingbeat. Every other joint stays simulated.
+function writeFlightPose(d: MjData) {
+  if (flight.state === 'ground') return;
+  d.qpos[0] = flight.x; d.qpos[1] = flight.y; d.qpos[2] = flight.z;
+  const q = qmul(qmul(qaxis(0, 0, 1, flight.yaw), qaxis(0, 1, 0, flight.pitch)), qaxis(1, 0, 0, flight.roll));
+  for (let i = 0; i < 4; i++) d.qpos[3 + i] = q[i];
+  d.qvel[0] = flight.vx; d.qvel[1] = flight.vy; d.qvel[2] = flight.vz;
+  d.qvel[3] = d.qvel[4] = d.qvel[5] = 0;
+  // The wings are free during touchdown: they reach the folded pose by the end of settle, and
+  // a kinematically pinned wing against the hind legs shoved the legs into the floor.
+  if (flight.state === 'touchdown') return;
+  // Stylized stroke: yaw sweeps fore-aft, roll (elevation) and pitch follow a quarter cycle
+  // behind. Amplitude per side follows the steering DN asymmetry, their documented function.
+  // The stroke centre blends in from the takeoff pose and back out to the folded rest pose,
+  // so the wings are handed back to neural control from where the springs can hold them.
+  flight.phase += 2 * Math.PI * FLIGHT.flapHz * 1e-4;
+  const s = Math.sin(flight.phase), c = Math.cos(flight.phase);
+  const A = flight.flap;
+  const takingOff = flight.state === 'takeoff';
+  wingJoints.forEach((w, i) => {
+    const amp = A * (1 + (w.side === 'l' ? 0.25 : -0.25) * flight.asym);
+    const stroke = WING_STROKE[w.axis];
+    const centre = takingOff ? flight.wingFrom[i] + (stroke - flight.wingFrom[i]) * A
+                             : stroke + (WING_REST[w.axis] - stroke) * flight.fold;
+    const v = w.axis === 'yaw' ? centre + 0.85 * amp * s : centre + 0.35 * amp * c;
+    d.qpos[w.qadr] = v; d.qvel[w.dadr] = 0;
+  });
+}
+// The front and middle legs tuck under the body in flight (supplied), using the shuffle
+// joints and offsets. The hind legs keep their standing targets: lifted, they fold up into
+// the wing stroke and pin the wings against the femur.
+function stepFlightLegs(d: MjData) {
+  for (const leg of shuffleLegs) {
+    leg.amount = 0;
+    const tuck = leg.name.startsWith('T3') ? 0 : flight.tuck;
+    for (const { ai, offset } of leg.joints) {
+      d.ctrl[ai] = Math.max(model.actuator_ctrlrange[2 * ai],
+        Math.min(model.actuator_ctrlrange[2 * ai + 1], holdCtrl[ai] + offset * 2.2 * tuck));
+    }
+  }
 }
 
 function stepSimulation() {
+  writeFlightPose(data);
   mujoco.mj_step(model, data);
   sim.steps++;
   // Exactly one brain millisecond per ten physics steps, including the frame's compute budget.
@@ -739,7 +979,9 @@ function stepSimulation() {
     stepPoke(0.001);
     stepLoom(0.001);
     applyBrainToActuators(brain, data);
-    stepShuffle(brain, data, 0.001);
+    stepFlight(brain, data, 0.001);
+    if (flight.state === 'ground') stepShuffle(brain, data, 0.001);
+    else stepFlightLegs(data);
   }
 }
 
@@ -792,8 +1034,28 @@ function stepSimulation() {
     const homePosition = camera.position.clone();
     const homeTarget = controls.target.clone();
     $('b_home').onclick = () => {
-      camera.position.copy(homePosition); controls.target.copy(homeTarget); controls.update();
+      // Recenter on the fly wherever it is: the home framing, offset to the live thorax.
+      const t = flight.state === 'ground' ? homeTarget : followTarget();
+      camera.position.copy(homePosition).sub(homeTarget).add(t); controls.target.copy(t); controls.update();
     };
+    const followPos = new THREE.Vector3(), followDelta = new THREE.Vector3();
+    const followBody = mujoco.mj_name2id(model, 1 /* mjOBJ_BODY */, 'thorax');
+    function followTarget() {
+      return followPos.set(data.xpos[followBody * 3], data.xpos[followBody * 3 + 1], data.xpos[followBody * 3 + 2]);
+    }
+    // In flight the orbit target tracks the thorax while the camera stays where the user put
+    // it, panning to keep the fly in view: a spectator, not a chase camera. Moving the camera
+    // with the fly was tried and flew it straight through the flowers and fern.
+    let following = false;
+    function stepFollow(dt: number) {
+      const flying = flight.state !== 'ground';
+      if (!flying && !following) return;
+      const target = flying ? followTarget() : homeTarget;
+      followDelta.copy(target).sub(controls.target).multiplyScalar(1 - Math.exp(-dt / 0.15));
+      controls.target.add(followDelta);
+      if (!flying && followDelta.lengthSq() < 1e-8) { controls.target.copy(homeTarget); following = false; }
+      else following = true;
+    }
 
     const hemi = new THREE.HemisphereLight(0x9fc4ff, 0x1a2028, 1.15);
     scene.add(hemi);
@@ -869,6 +1131,15 @@ function stepSimulation() {
           hillMeshes.push(n);                       // short ground-level decor only — for the
         });                                          // hilltop-placement search below
       }
+      if (glassMeshes.length) {
+        // Flight stays inside the real glass: 72% of its inner radius and below its roof.
+        const gbox = new THREE.Box3();
+        for (const m of glassMeshes) gbox.expandByObject(m);
+        const gsize = new THREE.Vector3(), gcenter = new THREE.Vector3();
+        gbox.getSize(gsize); gbox.getCenter(gcenter);
+        flight.bounds = { cx: gcenter.x, cy: gcenter.y, r: 0.72 * Math.min(gsize.x, gsize.y) / 2,
+                          zmin: 0.2, zmax: Math.min(gbox.max.z - 0.35, 1.2) };
+      }
       if (hillMeshes.length) {
         loadBall(scene, flyBox, hillMeshes, glassMeshes, solidMeshes).catch(err => console.warn('loadBall failed', err));
       }
@@ -876,6 +1147,7 @@ function stepSimulation() {
 
     buildDriveMap(model, brain);
     buildShuffleMap();
+    buildFlightMap();
     stimSwitch.sweet = 1; applyStim('sweet');
     $('s_neu').textContent = brain.N.toLocaleString();
     $('s_syn').textContent = brain.meta.E.toLocaleString();
@@ -1059,7 +1331,7 @@ function stepSimulation() {
     // ---- loop
     const timestep = 1e-4;                          // flybody's opt.timestep
     let last = performance.now(), acc = 0, fps = 0, fpsT = last, frames = 0, sps = 0, spsN = 0, spsT = last;
-    let nextFrameAt = last, mapAt = 0, hudAt = 0, loomShown = false;
+    let nextFrameAt = last, mapAt = 0, hudAt = 0, loomShown = false, flightShown: FlightState = 'ground';
     // Browser suspension must never become a backlog of simulation work on return.
     document.addEventListener('visibilitychange', () => {
       last = nextFrameAt = performance.now();
@@ -1126,6 +1398,8 @@ function stepSimulation() {
         $('s_steer').textContent = brain.rate.dn_steer_l.toFixed(0) + ' / ' + brain.rate.dn_steer_r.toFixed(0) + ' Hz';
         $('s_groom').textContent = brain.rate.dn_groom.toFixed(0) + ' Hz';
         $('s_pam').textContent  = brain.rate.pam.toFixed(1) + ' Hz';
+        $('s_flight').textContent = flight.state === 'ground' ? 'on the ground' : `${flight.state}, ${flight.count} so far`;
+        $('s_escape').textContent = flight.escape.toFixed(0) + ' Hz';
       }
       $('s_cnt').textContent  = brain.sugarFeedSpikes.toLocaleString();
 
@@ -1134,6 +1408,13 @@ function stepSimulation() {
       stepLighting(wall);
       stepLoomDisc();
       if (loom.active !== loomShown) { loomShown = loom.active; syncStimUI(); }
+      stepFollow(wall);
+      if (flight.state !== flightShown) {
+        flightShown = flight.state;
+        $('flight-state').hidden = flight.state === 'ground';
+        $('flight-state').textContent = flight.state === 'takeoff' || flight.state === 'flight' ? 'In flight' : 'Landing';
+        document.body.classList.toggle('is-flying', flight.state !== 'ground');
+      }
       controls.update();
       renderer.render(scene, camera);
       if (now >= mapAt) {
@@ -1155,7 +1436,7 @@ function stepSimulation() {
     flyWindow.fly = { mujoco, model, data, brain, sim, scene, camera, renderer, controls, geomNodes, quality,
                    applyBrain: () => applyBrainToActuators(brain, data), driveMap, shuffle, shuffleLegs,
                    stepSimulation, stimSwitch, stimPulse, applyStim, syncStimUI, poke, pokeBody, pokeAtScreen,
-                   loom, startLoom, lighting, lights: { hemi, key, rim },
+                   loom, startLoom, lighting, lights: { hemi, key, rim }, flight, FLIGHT,
                    sync: () => syncGeoms(model, data),
                    stepBall, get ball() { return ball; }, get world() { return world; },
                    dbg: () => ({ paused: sim.paused, acc, steps: sim.steps, time: data.time,

@@ -20,9 +20,11 @@ terrarium itself supplies no visual, olfactory or contact feedback to the brain.
 [environment](11-environment.md).
 
 Identified feeding motor populations drive proboscis actuator targets through smoothed firing
-rates. Head and antennal responses also follow neural activity. Wing movements and foot
-adjustments use supplied patterns driven by descending populations; these are not reconstructed
-ventral nerve cord circuits or learned locomotion.
+rates. Head and antennal responses also follow neural activity. Wing movements, foot
+adjustments and flight use supplied patterns driven by descending populations; these are not
+reconstructed ventral nerve cord circuits or learned locomotion. Flight is the largest of these:
+the escape descending neurons launch it, the steering descending neurons turn it, and their
+silence ends it, while the wingbeat and path are supplied (see [flight](12-flight.md)).
 
 | Population | Body output |
 |---|---|

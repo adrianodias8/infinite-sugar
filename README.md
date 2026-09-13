@@ -6,8 +6,8 @@ An emulated fruit fly, embodied and given infinite sugar.
 
 A whole-brain emulation using the FlyWire connectome: 139,255 neurons driving a simulated
 fruit fly in a terrarium. Its sweet-sensing neurons receive continuous stimulation. Feeding,
-head and antennal motion follow neural activity; wing movements and small foot shuffles use
-supplied patterns. The corner map shows sampled FlyWire positions and connections lighting up
+head and antennal motion follow neural activity; wing movements, small foot shuffles and
+flight use supplied patterns gated by identified descending neurons. The corner map shows sampled FlyWire positions and connections lighting up
 as neurons fire.
 
 Inspired by *Infinite Pain* (2025) by Harris Rosenblum.
@@ -29,8 +29,12 @@ The local server builds once at startup; restart it after editing source files.
 Name the fly to begin. Drag to orbit and scroll to zoom. Tap the fly to touch it: a brief
 mechanosensory pulse, held longer on the head and antennae. Sugar, pause and recenter controls
 sit below the fly, with an environment strip for the other senses: touch, heat, cool, odour,
-bitter and damp are switches, Light also brightens the terrarium, and Loom sends a dark disc
-at the fly. Each drives a real FlyWire population.
+bitter and damp are switches, Light also brightens the terrarium, and Loom sends a dark sphere
+at the fly. Each drives a real FlyWire population. A loom fires the escape circuit, and the
+escape circuit launches the fly: a short flight around the terrarium, steered by the real
+steering descending neurons, with the wingbeat and the flight path supplied (see
+[docs/12-flight.md](docs/12-flight.md)). It lands back on its perch once the escape neurons
+fall quiet.
 About contains the premise, technical summary, credits and further reading; Inspect shows
 neural activity, sensory input rates and simulation statistics.
 

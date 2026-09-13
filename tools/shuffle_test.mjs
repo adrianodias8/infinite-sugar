@@ -34,11 +34,11 @@ const start = app.indexOf('// --------------------------------------------------
 const end = app.indexOf('// ---------------------------------------------------------------- main', start);
 assert(start >= 0 && end > start, 'controller section must exist');
 vm.runInContext(app.slice(start, end) + `
-globalThis.controller = { resetSim, buildDriveMap, buildShuffleMap, stepSimulation, stepShuffle,
-  shuffle, get legs() { return shuffleLegs; }, get hold() { return holdCtrl; },
+globalThis.controller = { resetSim, buildDriveMap, buildShuffleMap, buildFlightMap, stepSimulation, stepShuffle,
+  shuffle, flight, get legs() { return shuffleLegs; }, get hold() { return holdCtrl; },
   setNeural(value) { neural = value; } };`, context);
 const c = context.controller;
-c.resetSim(); c.buildDriveMap(model, brain); c.buildShuffleMap();
+c.resetSim(); c.buildDriveMap(model, brain); c.buildShuffleMap(); c.buildFlightMap();
 
 function advance(seconds) {
   for (let i = 0; i < Math.round(seconds * 10000); i++) c.stepSimulation();
@@ -80,12 +80,16 @@ advance(1);
 assert(brain.sugarFeedSpikes > 0, 'sugar advances the artwork counter');
 assert.equal(brain.sugarFeedSpikes, brain.feedSpikes - rawBeforeSugar, 'counter records actual feeding spikes');
 assert(brain.rate.mn_proboscis > brain.rest.mn_proboscis, 'sugar still drives feeding');
+// Looming would launch the fly (tools/flight_test.mjs covers that); this checks the standing body.
+c.flight.enabled = false;
 for (const name of Object.keys(brain.stim)) brain.setStim(name, 1);
 advance(2);
 console.log('all stimuli', state());
+assert.equal(c.flight.state, 'ground', 'flight stays disabled for the standing check');
 assert(Array.from(brain.v).every(Number.isFinite), 'finite membrane potentials');
 assert(data.qpos[2] > -0.04 && data.qpos[2] < 0.02, 'body stays upright under combined stimulation');
 for (const name of Object.keys(brain.stim)) brain.setStim(name, 0);
+c.flight.enabled = true;
 // Silence the command inputs: wall/sim time alone must never request another foot movement.
 const count = c.shuffle.count;
 const silent = { rate:{ dn_groom:0, dn_steer_l:0, dn_steer_r:0 } };

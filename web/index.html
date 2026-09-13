@@ -64,13 +64,14 @@
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4H4v4m12-4h4v4M4 16v4h4m12-4v4h-4"/><circle cx="12" cy="12" r="3"/></svg>
       </button>
       <button id="b_sugar" class="sugar-button on" data-stim="sweet" aria-pressed="true"><span class="sugar-dot" aria-hidden="true"></span><span id="sugar-label">Sugar on</span></button>
+      <span id="flight-state" class="flight-state" role="status" hidden>In flight</span>
     </div>
     <div class="stim-strip" role="group" aria-label="Environment">
       <button class="stim-button" data-stim="touch" aria-pressed="false" title="Mechanosensory neurons (2,674)">Touch</button>
       <button class="stim-button" data-stim="heat" aria-pressed="false" title="Heating-responsive thermosensory neurons (7)">Heat</button>
       <button class="stim-button" data-stim="cool" aria-pressed="false" title="Cold thermosensory and cooling hygrosensory neurons (38)">Cool</button>
       <button class="stim-button" data-stim="light" aria-pressed="false" title="Visual neurons (11,426)">Light</button>
-      <button class="stim-button" data-stim="looming" data-event="loom" aria-pressed="false" title="A dark disc approaches; looming detectors LC4 + LPLC2 (314)">Loom</button>
+      <button class="stim-button" data-stim="looming" data-event="loom" aria-pressed="false" title="A dark sphere approaches: looming detectors LC4 + LPLC2 (314) drive the escape circuit, which launches the fly">Loom</button>
       <button class="stim-button" data-stim="odour" aria-pressed="false" title="Olfactory receptor neurons (2,281)">Odour</button>
       <button class="stim-button" data-stim="bitter" aria-pressed="false" title="Bitter gustatory neurons (65)">Bitter</button>
       <button class="stim-button" data-stim="damp" aria-pressed="false" title="Hygrosensory neurons (74)">Damp</button>
@@ -86,6 +87,7 @@
   <p>We believe this may be of note as a solution to moral philosophy. As technology advances, we may be able to simulate pleasant lives for increasingly complex forms of life.</p>
   <details class="work-notes"><summary>Technical summary</summary>
     <p>Some movements use supplied patterns driven by neural activity. There is no learning or habituation, so there is no mechanism for <span data-fly-name></span> to grow bored of the supply of sugar or its stationary position.</p>
+    <p>The environment strip drives the other sensory populations, and a tap on <span data-fly-name></span> is a brief touch. A looming object fires the real escape circuit, and that circuit launches a flight: the decision to take off, the turning and the decision to land come from identified descending neurons; the wingbeat, airspeed and path are supplied, because the wing motor circuit is not in the brain dataset.</p>
     <p>The whole brain emulation uses a simplified leaky integrate-and-fire model of 139,255 neurons and 2,700,513 connections.</p>
     <p>The terrarium provides a scenic environment for <span data-fly-name></span> to enjoy, though it does not directly interact with or observe it per se.</p>
     <p id="neural-map-notes">The neural view samples real FlyWire positions and connections. Blue marks sensory neurons, pink internal neurons, and yellow motor neurons and descending commands. Flashes follow simulated spikes, briefly extended for visibility; a connection lights when its source fires. Lines join representative positions and do not trace the shapes of neurons.</p>
@@ -126,6 +128,8 @@
     <tr><td>steering DN L/R</td><td id="s_steer">–</td></tr>
     <tr><td>grooming DN</td><td id="s_groom">–</td></tr>
     <tr><td>PAM (DA)</td><td id="s_pam">–</td></tr>
+    <tr><td>escape drive (100 ms)</td><td id="s_escape">–</td></tr>
+    <tr><td>flight</td><td id="s_flight">–</td></tr>
   </table>
 </section>
     <section aria-labelledby="senses-details-title"><h3 id="senses-details-title">Senses</h3>  <table id="senses">

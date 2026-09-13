@@ -5,6 +5,8 @@ export interface MjModel {
   geom_type: Int32Array;
   geom_bodyid: Int32Array;
   body_parentid: Int32Array;
+  body_subtreemass: Float64Array;
+  opt: { gravity: Float64Array, timestep: number };
   geom_size: Float64Array;
   geom_dataid: Int32Array;
   geom_matid: Int32Array;
@@ -32,6 +34,7 @@ export interface MjData {
   ctrl: Float64Array;
   xpos: Float64Array;
   xquat: Float64Array;
+  qfrc_constraint: Float64Array;
   geom_xpos: Float64Array;
   geom_xmat: Float64Array;
 }
