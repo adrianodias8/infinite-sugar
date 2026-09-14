@@ -3,6 +3,10 @@ export interface MjModel {
   nu: number;
   ngeom: number;
   geom_type: Int32Array;
+  geom_bodyid: Int32Array;
+  body_parentid: Int32Array;
+  body_subtreemass: Float64Array;
+  opt: { gravity: Float64Array, timestep: number };
   geom_size: Float64Array;
   geom_dataid: Int32Array;
   geom_matid: Int32Array;
@@ -29,6 +33,8 @@ export interface MjData {
   qvel: Float64Array;
   ctrl: Float64Array;
   xpos: Float64Array;
+  xquat: Float64Array;
+  qfrc_constraint: Float64Array;
   geom_xpos: Float64Array;
   geom_xmat: Float64Array;
 }
@@ -41,6 +47,7 @@ export interface MujocoModule {
   MjModel: { loadFromXML(path: string): MjModel };
   MjData: new(model: MjModel) => MjData;
   mj_name2id(model: MjModel, type: number, name: string): number;
+  mj_id2name(model: MjModel, type: number, id: number): string;
   mj_resetDataKeyframe(model: MjModel, data: MjData, key: number): void;
   mj_forward(model: MjModel, data: MjData): void;
   mj_step(model: MjModel, data: MjData): void;

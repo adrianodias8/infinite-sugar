@@ -14,13 +14,18 @@ experience occurs.
 
 ## Input and output
 
-Sugar directly stimulates sweet-sensing gustatory neurons. The terrarium supplies no visual,
-olfactory or contact feedback to the brain.
+The terrarium supplies the senses: a sugar sack the fly tastes by contact and smells at a
+distance, a day and night cycle for the visual, thermal and hygrosensory cells, and moving
+objects as looming and touch — each split by side, as the populations are in FlyWire. The
+environment strip overrides any of them, and a tap on the fly is a brief mechanosensory pulse.
+See [environment](11-environment.md) and [world](13-world.md).
 
 Identified feeding motor populations drive proboscis actuator targets through smoothed firing
-rates. Head and antennal responses also follow neural activity. Wing movements and foot
-adjustments use supplied patterns driven by descending populations; these are not reconstructed
-ventral nerve cord circuits or learned locomotion.
+rates. Head and antennal responses also follow neural activity. Wing movements, foot
+adjustments and flight use supplied patterns driven by descending populations; these are not
+reconstructed ventral nerve cord circuits or learned locomotion. Flight is the largest of these:
+the escape descending neurons launch it, the steering descending neurons turn it, and their
+silence ends it, while the wingbeat and path are supplied (see [flight](12-flight.md)).
 
 | Population | Body output |
 |---|---|

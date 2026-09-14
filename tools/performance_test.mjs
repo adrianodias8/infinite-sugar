@@ -43,8 +43,8 @@ const scope = vm.createContext({
   quality:new AdaptiveQuality(), sim:simulated,
   $:()=>({hasAttribute:()=>false}), brain:{sugarFeedSpikes:0},
   controls:{update:()=>{}}, renderer:{render:()=>renders++}, scene:{}, camera:{},
-  neuralMap:{draw:()=>{}}, stepBall:()=>{}, applyQuality:()=>{},
-  stepSimulation:()=>steps++, syncGeoms:()=>{}, model:{}, data:{},
+  neuralMap:{draw:()=>{}}, stepBall:()=>{}, stepSack:()=>{}, stepSound:()=>{}, statusSentence:()=>'', stepRipples:()=>{}, stepLighting:()=>{}, stepLoomDisc:()=>{}, applyQuality:()=>{},
+  stepSimulation:()=>steps++, syncGeoms:()=>{}, model:{}, data:{}, loom:{active:false}, syncStimUI:()=>{}, flight:{state:'ground',count:0,escape:0,walk:{count:0}}, stepFollow:()=>{}, world:{enabled:true,day:1,levels:{sweet:0,sweetLeg:0,bitter:0,object:0},loomers:[]}, groom:{active:false},
 });
 vm.runInContext(app.slice(begin,end)+'\nglobalThis.tick=frame; globalThis.clock=()=>({last,acc,nextFrameAt});',scope);
 scope.tick(); assert.equal(renders,1);

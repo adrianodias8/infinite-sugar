@@ -60,6 +60,7 @@ for i in range(N):
     # --- looming detectors: the biologically correct trigger for the giant fiber -
     elif p == "LC4":                                         role[i] = "lc4"
     elif p == "LPLC2":                                       role[i] = "lplc2"
+    elif p == "LC11":                                        role[i] = "lc11"        # small-object motion detectors
     # --- inputs: sensory populations -------------------------------------------
     elif s == "sugar/water":                                 role[i] = "grn_sweet"
     elif s == "SA_VTV_pro_meso_meta" and c == "gustatory":   role[i] = "grn_sweet_leg"
@@ -79,6 +80,26 @@ for r in ("mn_neck", "mn_antenna", "dn_steer", "dn_escwing"):
     for sd in ("left", "right"):
         g = [i for i in groups[r] if side[i] == sd]
         if g: groups[f"{r}_{sd[0]}"] = g
+# Side-split the sensory populations the world can drive from one side: the terrarium can
+# smell/see/loom/touch the fly on the left or the right, and the steering and escape DNs are
+# split the same way, so a lateralised input has a chance of a lateralised output. Neurons
+# without a side (30 ORNs, 76 'center' visual cells) stay in the union only.
+for r in ("orn", "mechano", "visual", "lc4", "lplc2", "lc11", "grn_sweet", "grn_bitter", "hygro"):
+    for sd in ("left", "right"):
+        g = [i for i in groups[r] if side[i] == sd]
+        if g: groups[f"{r}_{sd[0]}"] = g
+# Split the temperature senses by FlyWire sub_class. Real flies have separate hot and cold
+# cells on the arista/sacculus; v783 labels them: thermosensory 'heating' (TRN_VP2) vs 'cold'
+# (TRN_VP3a/b), and the hygrosensory 'cooling' / 'evaporative_cooling' cells (HRN_VP1l/VP1d).
+# `thermo` and `hygro` stay as the unions, so nothing that used them changes.
+SUB_SPLIT = {
+    "thermo_hot":  ("thermo", ("heating",)),
+    "thermo_cold": ("thermo", ("cold",)),
+    "hygro_cool":  ("hygro",  ("cooling", "evaporative_cooling")),
+}
+for r, (parent, subs) in SUB_SPLIT.items():
+    g = [i for i in groups[parent] if sub[i] in subs]
+    if g: groups[r] = g
 print("\nroles:")
 for r in sorted(groups): print(f"  {r:<16} {len(groups[r]):>4}")
 
