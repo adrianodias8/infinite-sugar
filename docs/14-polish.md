@@ -172,7 +172,18 @@ is measured before it is trusted.
   **Done**: `node tools/behaviour_budget.mjs [seconds]` (not part of `npm test`; a ten-minute
   run takes minutes). Latest run, on the perch disc in node (no terrarium mesh, so no plants
   or rocks to block bouts):
-  (the table from the latest run is recorded below this item once it finishes)
+
+  | 2026-09-14, 600 s | time | walking | flying | settling | feeding | grooming | standing |
+  |---|---|---|---|---|---|---|---|
+  | day | 300 s | 74.3 % | 0.0 % | 4.8 % | 0.1 % | 0.0 % | 20.8 % |
+  | night | 300 s | 82.6 % | 0.0 % | 3.9 % | 0.0 % | 0.0 % | 13.5 % |
+
+  175 walking bouts, of which 62.5 s in total were spent turning at the disc's edge; no
+  flights (nothing loomed), no shuffles (the shuffle only runs while standing), and the sack
+  was found by contact for 0.1 % of the day, so it stayed full. The fly walks more at night
+  than by day, as measured before. On open floor without obstacles this wiring walks about
+  four fifths of the time; the terrarium's rocks and plants, absent here, are what make it
+  stop, taste and turn.
 - A determinism check: two runs from the same seed produce the same trajectory for 30 s.
   **Done**: `tools/determinism_test.mjs` (in `npm test`) runs two independent brains and
   bodies for 12 s with the world on and a loom at 3 s, and asserts bit-identical `qpos`,
