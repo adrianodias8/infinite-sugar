@@ -83,6 +83,10 @@ is measured before it is trusted.
 
 ## 3. The world
 
+- **The fly should see.** The visual cells were one number. Done after this plan, in
+  [15-vision.md](15-vision.md): the terrarium is rendered from the head and every photoreceptor
+  is driven by the brightness in its own direction, placed from where its axon ends.
+
 - **Odour needs a plume.** A radial gradient smells the same from every direction; a real
   plume has a downwind axis. Fix: a fixed "draught" direction across the terrarium, odour
   strongest downwind of the sack, with the level on each antenna from the angle to the plume

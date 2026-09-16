@@ -470,6 +470,7 @@ function resetSim() {
   sim.brainStartMs = brain.ms; // preserve the brain, restart the body's clock beneath it
   flight.state = 'ground'; flight.escape = 0; flight.wallLR = [0, 0]; flight.walk.bout = 0;
   resetShuffle();
+  headBasisFromRest(data);
 }
 
 // ------------------------------------------------------------- brain -> body
@@ -964,6 +965,7 @@ function stepWorld(d: MjData, dt: number) {
   if (!world.enabled) {
     for (const k of Object.keys(world.levels)) { (world.levels as Record<string, number>)[k] = 0; setWorld(k, 0, 0); }
     world.touchHits.length = 0;
+    brain.setCellDrive(null, null); vision.active = false;
     return;
   }
   world.t += dt;
@@ -986,11 +988,24 @@ function stepWorld(d: MjData, dt: number) {
   const bright = world.day * (1 - shade);
   world.contrast += (Math.abs(bright - world.bright) / dt - world.contrast) * Math.min(1, dt / 0.05);
   world.bright = bright;
-  L.light = Math.min(1, WORLD.lightMax * bright + WORLD.contrastGain * world.contrast);
+  // With the eyes rendering, every photoreceptor is driven by what it sees (sampleRetina) and
+  // the scalar level below is not used; it remains the path without a renderer (the tests,
+  // the first frames) and the number the world reports.
+  const R = vision.retina;
+  vision.active = !!(R && vision.faces && vision.faces.t > 0);
+  if (vision.active && R) {
+    brain.setCellDrive(R.idx, R.amt);
+    L.light = (R.meanEye[0] + R.meanEye[1]) / 2;
+    setWorld('light', 0, 0);
+  } else {
+    brain.setCellDrive(null, null);
+    L.light = Math.min(1, WORLD.lightMax * bright + WORLD.contrastGain * world.contrast);
+  }
   L.heat = 0.5 * clamp((world.day - 0.65) / 0.35, 0, 1);
   L.cool = 0.5 * clamp((0.35 - world.day) / 0.35, 0, 1);
   L.damp = 0.3 * clamp((0.35 - world.day) / 0.35, 0, 1);
-  setWorld('light', L.light, L.light); setWorld('heat', L.heat, L.heat);
+  if (!vision.active) setWorld('light', L.light, L.light);
+  setWorld('heat', L.heat, L.heat);
   setWorld('cool', L.cool, L.cool); setWorld('damp', L.damp, L.damp);
   // --- sugar: the labellum tastes by touching the sack's surface (it hangs 0.05 under the head
   //     and extends only 0.02 further down, so it never reaches the floor from a standing body);
@@ -1057,6 +1072,124 @@ function stepWorld(d: MjData, dt: number) {
     pokeTouch(POKE.hold, Math.sin(bearing), 'ball');
     L.touch = 1;
   } else L.touch = poke.last === 'ball' ? poke.level : 0;
+}
+
+// ------------------------------------------------------------- vision
+// The fly's eyes. The `visual` pool is FlyWire's photoreceptors (R1-6 in the lamina, R7 and
+// R8 in the medulla, the ocellar retinula cells), and those neuropils are retinotopic, so each
+// cell's recorded position says where in the visual field it looks (tools/build_retina.py:
+// an inferred map, ranks along the dorsoventral axis and the anterior-posterior arc, spread
+// over -15..155 deg of azimuth per eye and +-65 deg of elevation; the ocelli look up). The page
+// renders the terrarium from the head in six 90-degree faces at a low resolution, and every
+// photoreceptor is driven by the linear luminance in its own direction, plus a transient from
+// how fast that luminance changes (the same two terms the scalar light level used). This is
+// what the eyes see: the plants, the rocks, the ball's shadow, the loom sphere, the night. The
+// looming and small-object detectors (LC4, LPLC2, LC11) are still told geometrically: motion
+// detection in the optic lobe needs temporal dynamics this kernel does not have (measured in
+// docs/15-vision.md). No per-cell adaptation: the drive is the brightness, as everything else.
+type RetinaJson = { n: number, idx: number[], eye: number[], az: number[], el: number[], type: number[], azimuthRange: [number, number], elevationRange: [number, number] };
+type Retina = {
+  n: number, idx: Int32Array, eye: Int8Array, type: Int8Array, az: Float32Array, el: Float32Array,   // degrees
+  dir: Float32Array,      // unit view direction per cell in the HEAD body frame (x,y,z triples)
+  lum: Float32Array,      // linear luminance seen, 0..1
+  filt: Float32Array,     // filtered |d lum / dt|
+  amt: Float32Array,      // membrane units per ms handed to the kernel
+  meanEye: [number, number, number],   // mean drive: left eye, right eye, ocelli
+};
+type EyeFaces = { size: number, data: Uint8Array[], t: number };   // six faces, RGBA rows bottom-up, world axes +x -x +y -y +z -z
+const EYE = {
+  faceSize: 24,        // pixels per face edge (11k photoreceptors over 6 x 24 x 24 = 3,456 samples; the eye's own resolution is coarser than the render's)
+  fps: [4, 8, 12],     // eye renders per second by quality level
+  contrastTau: 0.05,   // s, filter on |d luminance / dt|
+};
+// Face k looks along axis A_k with up vector U_k; its right vector is A x U (a three.js camera's
+// right is forward x up). A direction d lands on the face whose axis it mostly follows.
+const EYE_AXES: [number, number, number][] = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
+const EYE_UPS: [number, number, number][]  = [[0, 0, 1], [0, 0, 1], [0, 0, 1], [0, 0, 1], [0, 1, 0], [0, 1, 0]];
+const EYE_RIGHTS: [number, number, number][] = EYE_AXES.map((a, k) => { const u = EYE_UPS[k]; return [a[1] * u[2] - a[2] * u[1], a[2] * u[0] - a[0] * u[2], a[0] * u[1] - a[1] * u[0]]; });
+const vision = {
+  retina: null as Retina | null,
+  faces: null as EyeFaces | null,
+  basis: { fwd: [1, 0, 0], up: [0, 0, 1], left: [0, 1, 0] },   // the head body's axes at the rest pose, in the head frame
+  active: false,       // the world is on, the retina is loaded and at least one eye render exists
+  lastSample: 0,       // world time of the last sample (for the contrast term)
+};
+function headBasisFromRest(d: MjData) {
+  const H = mujoco.mj_name2id(model, 1, 'head');
+  if (H < 0) return;
+  const q = d.xquat.subarray(H * 4, H * 4 + 4);
+  const fwd = rotateByInverse(q, [1, 0, 0]), up = rotateByInverse(q, [0, 0, 1]);   // at rest the body faces +x, z up
+  const left = [up[1] * fwd[2] - up[2] * fwd[1], up[2] * fwd[0] - up[0] * fwd[2], up[0] * fwd[1] - up[1] * fwd[0]];
+  vision.basis = { fwd, up, left };
+  if (vision.retina) retinaDirections(vision.retina);
+}
+function rotateBy(q: ArrayLike<number>, v: number[]): number[] {   // R(q) v, q = [w,x,y,z]
+  const [w, x, y, z] = [q[0], q[1], q[2], q[3]], [vx, vy, vz] = v;
+  return [(1 - 2 * (y * y + z * z)) * vx + 2 * (x * y - w * z) * vy + 2 * (x * z + w * y) * vz,
+          2 * (x * y + w * z) * vx + (1 - 2 * (x * x + z * z)) * vy + 2 * (y * z - w * x) * vz,
+          2 * (x * z - w * y) * vx + 2 * (y * z + w * x) * vy + (1 - 2 * (x * x + y * y)) * vz];
+}
+function rotateByInverse(q: ArrayLike<number>, v: number[]): number[] { return rotateBy([q[0], -q[1], -q[2], -q[3]], v); }
+function retinaDirections(r: Retina) {
+  const { fwd, up, left } = vision.basis;
+  for (let i = 0; i < r.n; i++) {
+    const az = r.az[i] * Math.PI / 180 * (r.eye[i] === 1 ? -1 : 1), el = r.el[i] * Math.PI / 180;   // left eye: azimuth to the left
+    const ce = Math.cos(el), ca = Math.cos(az) * ce, sa = Math.sin(az) * ce, se = Math.sin(el);
+    for (let k = 0; k < 3; k++) r.dir[i * 3 + k] = ca * fwd[k] + sa * left[k] + se * up[k];
+  }
+}
+function buildRetina(json: RetinaJson): Retina {
+  const n = json.n;
+  const r: Retina = { n, idx: Int32Array.from(json.idx), eye: Int8Array.from(json.eye), type: Int8Array.from(json.type),
+    az: Float32Array.from(json.az, v => v / 10), el: Float32Array.from(json.el, v => v / 10),
+    dir: new Float32Array(n * 3), lum: new Float32Array(n), filt: new Float32Array(n), amt: new Float32Array(n), meanEye: [0, 0, 0] };
+  retinaDirections(r);
+  vision.retina = r;
+  return r;
+}
+// Which face a world direction lands on, and the pixel offset (RGBA) in that face's buffer.
+function facePixel(dx: number, dy: number, dz: number, size: number): [number, number] {
+  const ax = Math.abs(dx), ay = Math.abs(dy), az = Math.abs(dz);
+  const k = ax >= ay && ax >= az ? (dx > 0 ? 0 : 1) : ay >= az ? (dy > 0 ? 2 : 3) : (dz > 0 ? 4 : 5);
+  const A = EYE_AXES[k], U = EYE_UPS[k], R = EYE_RIGHTS[k];
+  const f = dx * A[0] + dy * A[1] + dz * A[2];
+  const u = (dx * U[0] + dy * U[1] + dz * U[2]) / f, rr = (dx * R[0] + dy * R[1] + dz * R[2]) / f;   // -1..1 across the 90 deg face
+  const col = Math.min(size - 1, Math.max(0, Math.floor((rr + 1) * 0.5 * size)));
+  const row = Math.min(size - 1, Math.max(0, Math.floor((u + 1) * 0.5 * size)));   // rows bottom-up, as WebGL reads them
+  return [k, (row * size + col) * 4];
+}
+// Render targets hold LINEAR light. What drives a cell is the display-encoded value of it
+// (the sRGB curve, close to the compressive response of a photoreceptor): a mid-grey surface
+// reads 0.4, not 0.12, so a daylit scene sits where the scalar daylight level used to.
+const encode = (c: number) => { c /= 255; return c <= 0.0031308 ? c * 12.92 : 1.055 * Math.pow(c, 1 / 2.4) - 0.055; };
+// Sample every photoreceptor from the current faces (called after each eye render) and turn
+// the brightness into the kernel drive: WORLD.lightMax x brightness + contrastGain x |d lum/dt|.
+function sampleRetina(d: MjData, r: Retina, faces: EyeFaces, tNow: number, drive: number) {
+  const H = mujoco.mj_name2id(model, 1, 'head');
+  const q = H >= 0 ? d.xquat.subarray(H * 4, H * 4 + 4) : [1, 0, 0, 0];
+  const [w, x, y, z] = [q[0], q[1], q[2], q[3]];
+  const m00 = 1 - 2 * (y * y + z * z), m01 = 2 * (x * y - w * z), m02 = 2 * (x * z + w * y);
+  const m10 = 2 * (x * y + w * z), m11 = 1 - 2 * (x * x + z * z), m12 = 2 * (y * z - w * x);
+  const m20 = 2 * (x * z - w * y), m21 = 2 * (y * z + w * x), m22 = 1 - 2 * (x * x + y * y);
+  const dt = vision.lastSample > 0 ? Math.max(1e-3, tNow - vision.lastSample) : 0;
+  const alpha = dt > 0 ? Math.min(1, dt / EYE.contrastTau) : 1;
+  const sum = [0, 0, 0], cnt = [0, 0, 0];
+  for (let i = 0; i < r.n; i++) {
+    const hx = r.dir[i * 3], hy = r.dir[i * 3 + 1], hz = r.dir[i * 3 + 2];
+    const dx = m00 * hx + m01 * hy + m02 * hz, dy = m10 * hx + m11 * hy + m12 * hz, dz = m20 * hx + m21 * hy + m22 * hz;
+    const [k, o] = facePixel(dx, dy, dz, faces.size);
+    const px = faces.data[k];
+    const lum = encode(0.2126 * px[o] + 0.7152 * px[o + 1] + 0.0722 * px[o + 2]);
+    const rate = dt > 0 ? Math.abs(lum - r.lum[i]) / dt : 0;
+    r.filt[i] += (rate - r.filt[i]) * alpha;
+    r.lum[i] = lum;
+    const level = Math.min(1, WORLD.lightMax * lum + WORLD.contrastGain * r.filt[i]);
+    r.amt[i] = level * drive;
+    const e = r.eye[i] === 2 || r.type[i] === 3 ? 2 : r.eye[i];
+    sum[e] += level; cnt[e]++;
+  }
+  for (let e = 0; e < 3; e++) r.meanEye[e] = cnt[e] ? sum[e] / cnt[e] : 0;
+  vision.lastSample = tNow;
 }
 
 // ------------------------------------------------------------- locomotion
@@ -1552,6 +1685,10 @@ function stepSimulation() {
     syncGeoms(model, data);
 
     say('loading terrarium');
+    fetch('./brain/retina.json').then(r => r.json()).then((json: RetinaJson) => {
+      const r = buildRetina(json);
+      console.info(`retina: ${r.n.toLocaleString()} photoreceptors placed in the visual field`);
+    }).catch(err => console.warn('retina load failed (the eyes stay off; the scalar light level drives the visual cells)', err));
     const flyBox = new THREE.Box3();
     for (const g of geomNodes) if (g.group <= 2 && !g.isFloor) flyBox.expandByObject(g.mesh);
     loadProps(scene, flyBox).then(() => {
@@ -1757,6 +1894,53 @@ function stepSimulation() {
       rim.intensity  = REST_LIGHT.rim  * day * (1 + 0.3 * u);
       scene.backgroundIntensity = REST_LIGHT.bg * (0.45 + 0.55 * day) * (1 + 0.25 * u);
       if (scene.fog instanceof THREE.Fog) scene.fog.color.setRGB((0.80 + 0.12 * u) * day, (0.92 + 0.06 * u) * day, (0.94 + 0.04 * u) * day);
+    }
+
+    // ---- the eyes: six 90-degree faces rendered from the head (world axes, see EYE_AXES),
+    // read back, and sampled once per photoreceptor. The fly's own body is hidden for these
+    // renders (an eye does not see its own head); the loom sphere, the ball, the plants, the
+    // day's lights and shadows are all in it. A few times a second, by quality level.
+    const eyeSize = EYE.faceSize;
+    const eyeTargets = EYE_AXES.map(() => new THREE.WebGLRenderTarget(eyeSize, eyeSize, { depthBuffer: true, stencilBuffer: false }));
+    const eyeCams = EYE_AXES.map((a, k) => { const c = new THREE.PerspectiveCamera(90, 1, 0.005, 40); c.up.set(EYE_UPS[k][0], EYE_UPS[k][1], EYE_UPS[k][2]); return c; });
+    const eyeFaces: EyeFaces = { size: eyeSize, data: EYE_AXES.map(() => new Uint8Array(eyeSize * eyeSize * 4)), t: 0 };
+    const eyeHead = mujoco.mj_name2id(model, 1, 'head');
+    const eyePos = new THREE.Vector3(), eyeLook = new THREE.Vector3();
+    let eyeAt = 0;
+    function stepEyes(now: number) {
+      if (!vision.retina || !world.enabled || eyeHead < 0 || now < eyeAt) return;
+      eyeAt = now + 1000 / EYE.fps[quality.level];
+      eyePos.set(data.xpos[eyeHead * 3], data.xpos[eyeHead * 3 + 1], data.xpos[eyeHead * 3 + 2]);
+      const shown: THREE.Mesh[] = [];
+      for (const g of geomNodes) if (g.mesh.visible) { g.mesh.visible = false; shown.push(g.mesh); }
+      for (let k = 0; k < 6; k++) {
+        const c = eyeCams[k]; c.position.copy(eyePos);
+        eyeLook.copy(eyePos).add(new THREE.Vector3(EYE_AXES[k][0], EYE_AXES[k][1], EYE_AXES[k][2]));
+        c.lookAt(eyeLook);
+        renderer.setRenderTarget(eyeTargets[k]); renderer.render(scene, c);
+        renderer.readRenderTargetPixels(eyeTargets[k], 0, 0, eyeSize, eyeSize, eyeFaces.data[k]);
+      }
+      renderer.setRenderTarget(null);
+      for (const m of shown) m.visible = true;
+      eyeFaces.t = now;
+      vision.faces = eyeFaces;
+      sampleRetina(data, vision.retina, eyeFaces, world.t, brain.stimDrive);
+    }
+    // what the eyes see, for Inspect: one dot per R1-6 cell at its azimuth and elevation
+    const eyeCanvas = document.getElementById('eyes') as HTMLCanvasElement | null;
+    function drawEyes() {
+      const r = vision.retina, cv = eyeCanvas; if (!r || !cv) return;
+      const ctx = cv.getContext('2d'); if (!ctx) return;
+      const W = cv.width, H = cv.height, half = W / 2, azSpan = 170, elSpan = 130;
+      ctx.fillStyle = '#100d13'; ctx.fillRect(0, 0, W, H);
+      for (let i = 0; i < r.n; i++) {
+        if (r.type[i] !== 0) continue;
+        // left eye on the left, azimuth growing toward the rear (outward); the midline at the centre
+        const u = (r.az[i] + 15) / azSpan, v = (65 - r.el[i]) / elSpan;
+        const x = r.eye[i] === 0 ? half - u * half : half + u * half, y = v * H;
+        const g = Math.round(20 + 235 * Math.min(1, r.lum[i]));
+        ctx.fillStyle = `rgb(${g},${g},${g})`; ctx.fillRect(x - 1, y - 1, 2, 2);
+      }
     }
 
     // ---- sound: a wingbeat tone while the wings stroke and a soft tick as each tripod lands,
@@ -2006,7 +2190,7 @@ function stepSimulation() {
         for (const [k, rate] of SENSE_ROWS) {   // the loop: world -> switch -> neurons
           const wl = (world.levels as Record<string, number>)[k];
           $('w_' + k).textContent = world.enabled && wl !== undefined ? wl.toFixed(2) : '–';
-          $('x_' + k).textContent = (stimSwitch[k] || 0) > 0 ? (stimSwitch[k] || 0).toFixed(2) : k === 'touch' && stimPulse.touch[0] + stimPulse.touch[1] > 0 ? 'tap' : k === 'looming' && loom.active ? 'loom' : '–';
+          $('x_' + k).textContent = (stimSwitch[k] || 0) > 0 ? (stimSwitch[k] || 0).toFixed(2) : k === 'touch' && stimPulse.touch && stimPulse.touch[0] + stimPulse.touch[1] > 0 ? 'tap' : k === 'looming' && loom.active ? 'loom' : '–';
           $('s_' + k).textContent = rate().toFixed(0) + ' Hz';
         }
         $('s_mnp').textContent  = brain.rate.mn_proboscis.toFixed(1) + ' Hz';
@@ -2021,6 +2205,9 @@ function stepSimulation() {
         $('s_flight').textContent = `${flight.state}; ${flight.count} flights, ${flight.walk.count} walks`;
         $('s_escape').textContent = flight.escape.toFixed(0) + ' Hz';
         const wl = world.levels;
+        const R = vision.retina;
+        $('s_eyes').textContent = R && vision.active ? `${R.meanEye[0].toFixed(2)} / ${R.meanEye[1].toFixed(2)} / ${R.meanEye[2].toFixed(2)} (${R.n.toLocaleString()} cells, ${EYE.fps[quality.level]} renders/s)` : R ? 'eyes off (world off)' : 'no retina';
+        drawEyes();
         $('s_day').textContent = world.enabled ? `${(world.day * 100).toFixed(0)}% daylight` : 'off';
         $('s_sugar_d').textContent = world.sugar.placed ? `${world.sugarDist.toFixed(2)} cm · ${Math.round(world.sugar.amount * 100)} % left` : '–';
         $('s_wtaste').textContent = `${wl.sweet.toFixed(2)} / ${wl.sweetLeg.toFixed(2)} / ${wl.bitter.toFixed(0)} / ${wl.odour.toFixed(2)}`;
@@ -2031,6 +2218,7 @@ function stepSimulation() {
       $('s_cnt').textContent  = brain.sugarFeedSpikes.toLocaleString();
 
       if (!sim.paused) stepBall(wall);
+      stepEyes(now);
       stepSack();
       stepSound();
       stepRipples(wall);
@@ -2070,7 +2258,7 @@ function stepSimulation() {
                    world, WORLD, walkable, nearestWalkable, plantAt, stimWorld, stepWorld, groom, GROOM,
                    sync: () => syncGeoms(model, data),
                    stepBall, get ball() { return ball; }, get ballWorld() { return ballWorld; },
-                   occlusion: occ, statusSentence, sound,
+                   occlusion: occ, statusSentence, sound, vision, EYE, stepEyes, sampleRetina, facePixel, THREE,
                    dbg: () => ({ paused: sim.paused, acc, steps: sim.steps, time: data.time,
                                  nodes: geomNodes.length,
                                  brainMs: brain.ms, sugar: brain.sugar,

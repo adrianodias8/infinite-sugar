@@ -15,10 +15,11 @@ experience occurs.
 ## Input and output
 
 The terrarium supplies the senses: a sugar sack the fly tastes by contact and smells at a
-distance, a day and night cycle for the visual, thermal and hygrosensory cells, and moving
-objects as looming and touch — each split by side, as the populations are in FlyWire. The
-environment strip overrides any of them, and a tap on the fly is a brief mechanosensory pulse.
-See [environment](11-environment.md) and [world](13-world.md).
+distance, the scene itself rendered from the head onto every photoreceptor, a day and night
+cycle for the thermal and hygrosensory cells, and moving objects as looming and touch — each
+split by side, as the populations are in FlyWire. The environment strip overrides any of them,
+and a tap on the fly is a brief mechanosensory pulse. See [environment](11-environment.md),
+[world](13-world.md) and [vision](15-vision.md).
 
 Identified feeding motor populations drive proboscis actuator targets through smoothed firing
 rates. Head and antennal responses also follow neural activity. Wing movements, foot

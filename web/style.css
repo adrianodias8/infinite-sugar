@@ -43,6 +43,7 @@ canvas{display:block;position:fixed;inset:0;z-index:0;touch-action:none}
 .stim-button:hover{border-color:#ffffff80;color:var(--ink)}
 .stim-button.on{background:#e6def0;border-color:#e6def0;color:#2a2231}
 #senses tr.on td{color:var(--sugar)}
+#eyes{position:static;inset:auto;z-index:auto;display:block;width:100%;height:auto;border-radius:6px;background:#100d13;margin:0 0 10px}
 #senses th{font-weight:400;text-align:left;opacity:.55;padding:0 0 6px}
 #senses td:not(:first-child),#senses th:not(:first-child){text-align:right;padding-left:8px}
 .sound-button .sound-wave{opacity:.35}
