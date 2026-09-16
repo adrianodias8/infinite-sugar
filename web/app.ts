@@ -470,6 +470,7 @@ function resetSim() {
   sim.brainStartMs = brain.ms; // preserve the brain, restart the body's clock beneath it
   flight.state = 'ground'; flight.escape = 0; flight.wallLR = [0, 0]; flight.walk.bout = 0;
   resetShuffle();
+  headBasisFromRest(data);
 }
 
 // ------------------------------------------------------------- brain -> body
@@ -899,9 +900,13 @@ const WORLD = {
   objectRange: 1.5, objectRate: 2.0,   // a small object crossing the view within objectRange at objectRate rad/s drives LC11 fully
   floorZ: -0.132,      // the physics floor; the terrarium's visual floor undulates just above it
   floorBand: 0.23,     // ground hits up to this far above floorZ count as walkable floor (the floor undulates to +0.10)
+  bodyRadius: 0.09,    // cm round the root that must be floor for the body to stand or land there (the thorax is 0.05 wide, the legs reach 0.18; the perch sits 0.1 from the fern's base, so the legs may overlap an edge, the body never does)
+  bodyClearance: 0.15, // cm the root must stay above the top of anything under it while airborne (the body's half-height is 0.14)
 };
 type Loomer = { x: number, y: number, z: number, vx: number, vy: number, vz: number, r: number, name: string };
-type GroundMap = { x0: number, y0: number, cell: number, n: number, ok: Uint8Array, plant: Uint8Array };   // plant: a cell occupied by foliage or flowers
+// plant: a cell occupied by foliage or flowers; clear: floor cells with no obstacle within WORLD.bodyRadius (the body fits);
+// top: the height of the highest solid thing over each cell (floorZ for floor cells), for flying over and around things.
+type GroundMap = { x0: number, y0: number, cell: number, n: number, ok: Uint8Array, plant: Uint8Array, clear?: Uint8Array, top?: Float32Array };
 const world = {
   enabled: true, t: 0, day: 1, shade: 0, sugarDist: 0,
   bright: 1, contrast: 0,                                // brightness at the fly and its filtered rate of change
@@ -930,6 +935,44 @@ function walkable(x: number, y: number) {
   if (i < 0 || j < 0 || i >= g.n || j >= g.n) return false;
   return g.ok[j * g.n + i] === 1;
 }
+// The body fits here: the cell and every cell within the body's radius are floor. Without an
+// eroded map (the tests' synthetic maps) this is plain walkability.
+function bodyClear(x: number, y: number) {
+  const g = world.ground;
+  if (!g) return Math.hypot(x, y) < 0.6;
+  const i = Math.floor((x - g.x0) / g.cell), j = Math.floor((y - g.y0) / g.cell);
+  if (i < 0 || j < 0 || i >= g.n || j >= g.n) return false;
+  return (g.clear || g.ok)[j * g.n + i] === 1;
+}
+// Erode the floor by the body's radius: a cell stays clear only if every cell within r is floor.
+function erodeOk(ok: Uint8Array, n: number, r: number) {
+  const clear = new Uint8Array(n * n), R = Math.ceil(r);
+  for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
+    if (ok[j * n + i] !== 1) continue;
+    let fits = 1;
+    for (let dj = -R; dj <= R && fits; dj++) for (let di = -R; di <= R; di++) {
+      if (di * di + dj * dj > r * r) continue;
+      const ii = i + di, jj = j + dj;
+      if (ii < 0 || jj < 0 || ii >= n || jj >= n || ok[jj * n + ii] !== 1) { fits = 0; break; }
+    }
+    clear[j * n + i] = fits;
+  }
+  return clear;
+}
+// The highest solid thing within the body's radius of a point (floorZ where there is only floor).
+function topOver(x: number, y: number) {
+  const g = world.ground;
+  if (!g || !g.top) return WORLD.floorZ;
+  const R = Math.ceil(WORLD.bodyRadius / g.cell), ci = Math.floor((x - g.x0) / g.cell), cj = Math.floor((y - g.y0) / g.cell);
+  let top = WORLD.floorZ;
+  for (let j = cj - R; j <= cj + R; j++) for (let i = ci - R; i <= ci + R; i++) {
+    if (i < 0 || j < 0 || i >= g.n || j >= g.n) continue;
+    const cx = g.x0 + (i + 0.5) * g.cell, cy = g.y0 + (j + 0.5) * g.cell;
+    if (Math.hypot(cx - x, cy - y) > WORLD.bodyRadius + 0.5 * g.cell) continue;
+    if (g.top[j * g.n + i] > top) top = g.top[j * g.n + i];
+  }
+  return top;
+}
 function plantAt(x: number, y: number) {
   const g = world.ground;
   if (!g) return false;
@@ -940,10 +983,11 @@ function plantAt(x: number, y: number) {
 function nearestWalkable(x: number, y: number): [number, number] {
   const g = world.ground;
   if (!g) { const r = Math.hypot(x, y) || 1; return r > 0.5 ? [x / r * 0.5, y / r * 0.5] : [x, y]; }   // the fallback disc, with a margin from its edge
-  if (walkable(x, y)) return [x, y];
+  if (bodyClear(x, y)) return [x, y];
+  const fit = g.clear || g.ok;   // a spot the whole body fits on, not just the point under the root
   let best: [number, number] = [0, 0], bd = Infinity;
   for (let j = 0; j < g.n; j++) for (let i = 0; i < g.n; i++) {
-    if (g.ok[j * g.n + i] !== 1) continue;
+    if (fit[j * g.n + i] !== 1) continue;
     const cx = g.x0 + (i + 0.5) * g.cell, cy = g.y0 + (j + 0.5) * g.cell;
     const dd = (cx - x) * (cx - x) + (cy - y) * (cy - y);
     if (dd < bd) { bd = dd; best = [cx, cy]; }
@@ -964,6 +1008,7 @@ function stepWorld(d: MjData, dt: number) {
   if (!world.enabled) {
     for (const k of Object.keys(world.levels)) { (world.levels as Record<string, number>)[k] = 0; setWorld(k, 0, 0); }
     world.touchHits.length = 0;
+    brain.setCellDrive(null, null); vision.active = false;
     return;
   }
   world.t += dt;
@@ -986,11 +1031,24 @@ function stepWorld(d: MjData, dt: number) {
   const bright = world.day * (1 - shade);
   world.contrast += (Math.abs(bright - world.bright) / dt - world.contrast) * Math.min(1, dt / 0.05);
   world.bright = bright;
-  L.light = Math.min(1, WORLD.lightMax * bright + WORLD.contrastGain * world.contrast);
+  // With the eyes rendering, every photoreceptor is driven by what it sees (sampleRetina) and
+  // the scalar level below is not used; it remains the path without a renderer (the tests,
+  // the first frames) and the number the world reports.
+  const R = vision.retina;
+  vision.active = !!(R && vision.faces && vision.faces.t > 0);
+  if (vision.active && R) {
+    brain.setCellDrive(R.idx, R.amt);
+    L.light = (R.meanEye[0] + R.meanEye[1]) / 2;
+    setWorld('light', 0, 0);
+  } else {
+    brain.setCellDrive(null, null);
+    L.light = Math.min(1, WORLD.lightMax * bright + WORLD.contrastGain * world.contrast);
+  }
   L.heat = 0.5 * clamp((world.day - 0.65) / 0.35, 0, 1);
   L.cool = 0.5 * clamp((0.35 - world.day) / 0.35, 0, 1);
   L.damp = 0.3 * clamp((0.35 - world.day) / 0.35, 0, 1);
-  setWorld('light', L.light, L.light); setWorld('heat', L.heat, L.heat);
+  if (!vision.active) setWorld('light', L.light, L.light);
+  setWorld('heat', L.heat, L.heat);
   setWorld('cool', L.cool, L.cool); setWorld('damp', L.damp, L.damp);
   // --- sugar: the labellum tastes by touching the sack's surface (it hangs 0.05 under the head
   //     and extends only 0.02 further down, so it never reaches the floor from a standing body);
@@ -1057,6 +1115,124 @@ function stepWorld(d: MjData, dt: number) {
     pokeTouch(POKE.hold, Math.sin(bearing), 'ball');
     L.touch = 1;
   } else L.touch = poke.last === 'ball' ? poke.level : 0;
+}
+
+// ------------------------------------------------------------- vision
+// The fly's eyes. The `visual` pool is FlyWire's photoreceptors (R1-6 in the lamina, R7 and
+// R8 in the medulla, the ocellar retinula cells), and those neuropils are retinotopic, so each
+// cell's recorded position says where in the visual field it looks (tools/build_retina.py:
+// an inferred map, ranks along the dorsoventral axis and the anterior-posterior arc, spread
+// over -15..155 deg of azimuth per eye and +-65 deg of elevation; the ocelli look up). The page
+// renders the terrarium from the head in six 90-degree faces at a low resolution, and every
+// photoreceptor is driven by the linear luminance in its own direction, plus a transient from
+// how fast that luminance changes (the same two terms the scalar light level used). This is
+// what the eyes see: the plants, the rocks, the ball's shadow, the loom sphere, the night. The
+// looming and small-object detectors (LC4, LPLC2, LC11) are still told geometrically: motion
+// detection in the optic lobe needs temporal dynamics this kernel does not have (measured in
+// docs/15-vision.md). No per-cell adaptation: the drive is the brightness, as everything else.
+type RetinaJson = { n: number, idx: number[], eye: number[], az: number[], el: number[], type: number[], azimuthRange: [number, number], elevationRange: [number, number] };
+type Retina = {
+  n: number, idx: Int32Array, eye: Int8Array, type: Int8Array, az: Float32Array, el: Float32Array,   // degrees
+  dir: Float32Array,      // unit view direction per cell in the HEAD body frame (x,y,z triples)
+  lum: Float32Array,      // linear luminance seen, 0..1
+  filt: Float32Array,     // filtered |d lum / dt|
+  amt: Float32Array,      // membrane units per ms handed to the kernel
+  meanEye: [number, number, number],   // mean drive: left eye, right eye, ocelli
+};
+type EyeFaces = { size: number, data: Uint8Array[], t: number };   // six faces, RGBA rows bottom-up, world axes +x -x +y -y +z -z
+const EYE = {
+  faceSize: 24,        // pixels per face edge (11k photoreceptors over 6 x 24 x 24 = 3,456 samples; the eye's own resolution is coarser than the render's)
+  fps: [4, 8, 12],     // eye renders per second by quality level
+  contrastTau: 0.05,   // s, filter on |d luminance / dt|
+};
+// Face k looks along axis A_k with up vector U_k; its right vector is A x U (a three.js camera's
+// right is forward x up). A direction d lands on the face whose axis it mostly follows.
+const EYE_AXES: [number, number, number][] = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
+const EYE_UPS: [number, number, number][]  = [[0, 0, 1], [0, 0, 1], [0, 0, 1], [0, 0, 1], [0, 1, 0], [0, 1, 0]];
+const EYE_RIGHTS: [number, number, number][] = EYE_AXES.map((a, k) => { const u = EYE_UPS[k]; return [a[1] * u[2] - a[2] * u[1], a[2] * u[0] - a[0] * u[2], a[0] * u[1] - a[1] * u[0]]; });
+const vision = {
+  retina: null as Retina | null,
+  faces: null as EyeFaces | null,
+  basis: { fwd: [1, 0, 0], up: [0, 0, 1], left: [0, 1, 0] },   // the head body's axes at the rest pose, in the head frame
+  active: false,       // the world is on, the retina is loaded and at least one eye render exists
+  lastSample: 0,       // world time of the last sample (for the contrast term)
+};
+function headBasisFromRest(d: MjData) {
+  const H = mujoco.mj_name2id(model, 1, 'head');
+  if (H < 0) return;
+  const q = d.xquat.subarray(H * 4, H * 4 + 4);
+  const fwd = rotateByInverse(q, [1, 0, 0]), up = rotateByInverse(q, [0, 0, 1]);   // at rest the body faces +x, z up
+  const left = [up[1] * fwd[2] - up[2] * fwd[1], up[2] * fwd[0] - up[0] * fwd[2], up[0] * fwd[1] - up[1] * fwd[0]];
+  vision.basis = { fwd, up, left };
+  if (vision.retina) retinaDirections(vision.retina);
+}
+function rotateBy(q: ArrayLike<number>, v: number[]): number[] {   // R(q) v, q = [w,x,y,z]
+  const [w, x, y, z] = [q[0], q[1], q[2], q[3]], [vx, vy, vz] = v;
+  return [(1 - 2 * (y * y + z * z)) * vx + 2 * (x * y - w * z) * vy + 2 * (x * z + w * y) * vz,
+          2 * (x * y + w * z) * vx + (1 - 2 * (x * x + z * z)) * vy + 2 * (y * z - w * x) * vz,
+          2 * (x * z - w * y) * vx + 2 * (y * z + w * x) * vy + (1 - 2 * (x * x + y * y)) * vz];
+}
+function rotateByInverse(q: ArrayLike<number>, v: number[]): number[] { return rotateBy([q[0], -q[1], -q[2], -q[3]], v); }
+function retinaDirections(r: Retina) {
+  const { fwd, up, left } = vision.basis;
+  for (let i = 0; i < r.n; i++) {
+    const az = r.az[i] * Math.PI / 180 * (r.eye[i] === 1 ? -1 : 1), el = r.el[i] * Math.PI / 180;   // left eye: azimuth to the left
+    const ce = Math.cos(el), ca = Math.cos(az) * ce, sa = Math.sin(az) * ce, se = Math.sin(el);
+    for (let k = 0; k < 3; k++) r.dir[i * 3 + k] = ca * fwd[k] + sa * left[k] + se * up[k];
+  }
+}
+function buildRetina(json: RetinaJson): Retina {
+  const n = json.n;
+  const r: Retina = { n, idx: Int32Array.from(json.idx), eye: Int8Array.from(json.eye), type: Int8Array.from(json.type),
+    az: Float32Array.from(json.az, v => v / 10), el: Float32Array.from(json.el, v => v / 10),
+    dir: new Float32Array(n * 3), lum: new Float32Array(n), filt: new Float32Array(n), amt: new Float32Array(n), meanEye: [0, 0, 0] };
+  retinaDirections(r);
+  vision.retina = r;
+  return r;
+}
+// Which face a world direction lands on, and the pixel offset (RGBA) in that face's buffer.
+function facePixel(dx: number, dy: number, dz: number, size: number): [number, number] {
+  const ax = Math.abs(dx), ay = Math.abs(dy), az = Math.abs(dz);
+  const k = ax >= ay && ax >= az ? (dx > 0 ? 0 : 1) : ay >= az ? (dy > 0 ? 2 : 3) : (dz > 0 ? 4 : 5);
+  const A = EYE_AXES[k], U = EYE_UPS[k], R = EYE_RIGHTS[k];
+  const f = dx * A[0] + dy * A[1] + dz * A[2];
+  const u = (dx * U[0] + dy * U[1] + dz * U[2]) / f, rr = (dx * R[0] + dy * R[1] + dz * R[2]) / f;   // -1..1 across the 90 deg face
+  const col = Math.min(size - 1, Math.max(0, Math.floor((rr + 1) * 0.5 * size)));
+  const row = Math.min(size - 1, Math.max(0, Math.floor((u + 1) * 0.5 * size)));   // rows bottom-up, as WebGL reads them
+  return [k, (row * size + col) * 4];
+}
+// Render targets hold LINEAR light. What drives a cell is the display-encoded value of it
+// (the sRGB curve, close to the compressive response of a photoreceptor): a mid-grey surface
+// reads 0.4, not 0.12, so a daylit scene sits where the scalar daylight level used to.
+const encode = (c: number) => { c /= 255; return c <= 0.0031308 ? c * 12.92 : 1.055 * Math.pow(c, 1 / 2.4) - 0.055; };
+// Sample every photoreceptor from the current faces (called after each eye render) and turn
+// the brightness into the kernel drive: WORLD.lightMax x brightness + contrastGain x |d lum/dt|.
+function sampleRetina(d: MjData, r: Retina, faces: EyeFaces, tNow: number, drive: number) {
+  const H = mujoco.mj_name2id(model, 1, 'head');
+  const q = H >= 0 ? d.xquat.subarray(H * 4, H * 4 + 4) : [1, 0, 0, 0];
+  const [w, x, y, z] = [q[0], q[1], q[2], q[3]];
+  const m00 = 1 - 2 * (y * y + z * z), m01 = 2 * (x * y - w * z), m02 = 2 * (x * z + w * y);
+  const m10 = 2 * (x * y + w * z), m11 = 1 - 2 * (x * x + z * z), m12 = 2 * (y * z - w * x);
+  const m20 = 2 * (x * z - w * y), m21 = 2 * (y * z + w * x), m22 = 1 - 2 * (x * x + y * y);
+  const dt = vision.lastSample > 0 ? Math.max(1e-3, tNow - vision.lastSample) : 0;
+  const alpha = dt > 0 ? Math.min(1, dt / EYE.contrastTau) : 1;
+  const sum = [0, 0, 0], cnt = [0, 0, 0];
+  for (let i = 0; i < r.n; i++) {
+    const hx = r.dir[i * 3], hy = r.dir[i * 3 + 1], hz = r.dir[i * 3 + 2];
+    const dx = m00 * hx + m01 * hy + m02 * hz, dy = m10 * hx + m11 * hy + m12 * hz, dz = m20 * hx + m21 * hy + m22 * hz;
+    const [k, o] = facePixel(dx, dy, dz, faces.size);
+    const px = faces.data[k];
+    const lum = encode(0.2126 * px[o] + 0.7152 * px[o + 1] + 0.0722 * px[o + 2]);
+    const rate = dt > 0 ? Math.abs(lum - r.lum[i]) / dt : 0;
+    r.filt[i] += (rate - r.filt[i]) * alpha;
+    r.lum[i] = lum;
+    const level = Math.min(1, WORLD.lightMax * lum + WORLD.contrastGain * r.filt[i]);
+    r.amt[i] = level * drive;
+    const e = r.eye[i] === 2 || r.type[i] === 3 ? 2 : r.eye[i];
+    sum[e] += level; cnt[e]++;
+  }
+  for (let e = 0; e < 3; e++) r.meanEye[e] = cnt[e] ? sum[e] / cnt[e] : 0;
+  vision.lastSample = tNow;
 }
 
 // ------------------------------------------------------------- locomotion
@@ -1129,6 +1305,7 @@ const flight = {
   bounds: { cx: -0.5, cy: -0.15, r: 1.25, zmin: 0.2, zmax: 0.95 },
   walk: { bout: 0, dir: 1, phase: 0, count: 0, blocked: 0, back: 0, turning: false, turnSign: 1, settle: 0 },   // back: 100 ms mean of dn_back; settle: stride blend-out after a bout
   bob: 0, bobV: 0, seed: 7,   // altitude random walk (seeded, so a run repeats)
+  obstacle: false, obstacleSign: 1, obstacleT: 0,   // turning away from something too tall to fly over: which way, for how long
 };
 type WingJoint = { qadr: number, dadr: number, side: 'l' | 'r', axis: 'yaw' | 'roll' | 'pitch' };
 // Stroke centre in flight, and the folded pose the wings are returned to before the root is
@@ -1236,15 +1413,15 @@ function stepFlight(b: BrainLike, d: MjData, dt: number) {
     W.bout -= dt;
     speed = WALK.speed * (W.dir > 0 ? 1 : -0.6); yawRate = flight.asym * WALK.yawRate;
     const nx = flight.x + speed * Math.cos(flight.yaw) * 0.05, ny = flight.y + speed * Math.sin(flight.yaw) * 0.05;
-    if (!walkable(nx, ny)) {
+    if (!bodyClear(nx, ny)) {
       // An obstacle or the edge of the floor: the bout is spent turning toward open floor
       // (supplied), so the brain's next bout can go somewhere. Ending the bout instead left
       // the fly facing the same obstacle for good.
       if (!W.turning) { W.blocked++; W.turning = true; }
       speed = 0;
       const look = 0.08, a = flight.yaw + (W.dir > 0 ? 0 : Math.PI);
-      const left = walkable(flight.x + look * Math.cos(a + 1.0), flight.y + look * Math.sin(a + 1.0));
-      const right = walkable(flight.x + look * Math.cos(a - 1.0), flight.y + look * Math.sin(a - 1.0));
+      const left = bodyClear(flight.x + look * Math.cos(a + 1.0), flight.y + look * Math.sin(a + 1.0));
+      const right = bodyClear(flight.x + look * Math.cos(a - 1.0), flight.y + look * Math.sin(a - 1.0));
       yawRate += (left && !right ? 1 : right && !left ? -1 : W.turnSign) * WALK.yawRate;
     } else W.turning = false;
     zTarget = flight.standZ + WALK.lift; W.settle = 0;
@@ -1341,12 +1518,46 @@ function stepFlight(b: BrainLike, d: MjData, dt: number) {
     if (Math.abs(err) > 0.35) yawRate += Math.sign(err) * prox * FLIGHT.yawRate;
   }
   flight.wallLR = lateral(FLIGHT.wallLoom * prox * prox, wrapAngle(Math.atan2(ry, rx) - flight.yaw)); applyLooming(d);
+  // Things in the air (supplied): the hill, the rocks, the plants, the sack. The root keeps
+  // WORLD.bodyClearance above the highest thing under it and under the point a third of a
+  // centimetre ahead, climbing when it can; what it cannot fly over inside the glass it turns
+  // away from, toward the lower side. The hard floor below is the guarantee: whatever the
+  // target says, the body is never carried into something.
+  let tooTall = false;
+  if (flight.state === 'flight' || flight.state === 'landing') {
+    const ahead = 0.35, ax = flight.x + Math.cos(flight.yaw) * ahead, ay = flight.y + Math.sin(flight.yaw) * ahead;
+    const needAhead = topOver(ax, ay) + WORLD.bodyClearance, need = Math.max(topOver(flight.x, flight.y) + WORLD.bodyClearance, needAhead);
+    if (need > zTarget) zTarget = Math.min(need, B.zmax);
+    tooTall = needAhead > B.zmax - 0.02;
+    if (tooTall) {
+      // cannot go over: slow down and turn toward the lower side, the turn taking priority over
+      // the steering DNs and the landing approach for as long as the way ahead is blocked. The
+      // direction is chosen when the block starts and kept, so two tall sides do not dither.
+      if (!flight.obstacle) {
+        const l = topOver(flight.x + Math.cos(flight.yaw + 1.0) * ahead, flight.y + Math.sin(flight.yaw + 1.0) * ahead);
+        const r = topOver(flight.x + Math.cos(flight.yaw - 1.0) * ahead, flight.y + Math.sin(flight.yaw - 1.0) * ahead);
+        flight.obstacleSign = l < r ? 1 : r < l ? -1 : flight.obstacleSign;
+      }
+      yawRate = flight.obstacleSign * FLIGHT.yawRate;
+      speed = Math.min(speed, 0.2 * FLIGHT.speed);
+      flight.obstacleT += dt;
+      // a landing approach blocked for a while aims for the nearest spot the body fits on instead
+      if (flight.state === 'landing' && flight.obstacleT > 2) {
+        const [tx, ty] = nearestWalkable(flight.x, flight.y);
+        flight.home = { x: tx, y: ty, z: flight.standZ, yaw: flight.yaw }; flight.obstacleT = 0;
+      }
+    } else flight.obstacleT = 0;
+    flight.obstacle = tooTall;
+  }
 
   const yawRate0 = flight.yawRate;
   flight.yawRate += (yawRate - flight.yawRate) * (dt / 0.12);
   const yawAccel = (flight.yawRate - yawRate0) / dt;
   flight.yaw = wrapAngle(flight.yaw + flight.yawRate * dt);
   flight.vx = speed * Math.cos(flight.yaw); flight.vy = speed * Math.sin(flight.yaw);
+  // the guarantee: the next step never puts the root over something too tall to clear under the roof
+  if ((flight.state === 'flight' || flight.state === 'landing') && speed > 0 &&
+      topOver(flight.x + flight.vx * dt, flight.y + flight.vy * dt) + WORLD.bodyClearance > B.zmax) { flight.vx = 0; flight.vy = 0; }
   flight.x += flight.vx * dt; flight.y += flight.vy * dt;
   const rx2 = flight.x - B.cx, ry2 = flight.y - B.cy, rc2 = Math.hypot(rx2, ry2);
   if (rc2 > B.r) { flight.x = B.cx + rx2 / rc2 * B.r; flight.y = B.cy + ry2 / rc2 * B.r; }
@@ -1354,6 +1565,7 @@ function stepFlight(b: BrainLike, d: MjData, dt: number) {
   flight.z += (clamp(zTarget, Math.min(B.zmin, flight.home.z), B.zmax) - flight.z) * (dt / 0.35);
   const exact = flight.state === 'takeoff' || flight.state === 'settle' || flight.state === 'touchdown' || flight.state === 'walk';
   if (exact) flight.z = zTarget;   // exact lift-off, touchdown and walking heights
+  if (flight.state === 'flight' || flight.state === 'landing') flight.z = Math.max(flight.z, Math.min(B.zmax, topOver(flight.x, flight.y) + WORLD.bodyClearance));
   flight.vz = (flight.z - z0) / dt;
   const airborne = flight.state === 'takeoff' || flight.state === 'flight' || flight.state === 'landing';
   // Bank into the turn, leading it slightly (a share of yaw acceleration), like a real banked turn.
@@ -1552,6 +1764,10 @@ function stepSimulation() {
     syncGeoms(model, data);
 
     say('loading terrarium');
+    fetch('./brain/retina.json').then(r => r.json()).then((json: RetinaJson) => {
+      const r = buildRetina(json);
+      console.info(`retina: ${r.n.toLocaleString()} photoreceptors placed in the visual field`);
+    }).catch(err => console.warn('retina load failed (the eyes stay off; the scalar light level drives the visual cells)', err));
     const flyBox = new THREE.Box3();
     for (const g of geomNodes) if (g.group <= 2 && !g.isFloor) flyBox.expandByObject(g.mesh);
     loadProps(scene, flyBox).then(() => {
@@ -1626,7 +1842,7 @@ function stepSimulation() {
         // raycasts at load.
         const n = 56, span = 2 * flight.bounds.r, cell = span / n;
         const x0 = gcenter.x - span / 2, y0 = gcenter.y - span / 2;
-        const ok = new Uint8Array(n * n), plant = new Uint8Array(n * n);
+        const ok = new Uint8Array(n * n), plant = new Uint8Array(n * n), top = new Float32Array(n * n).fill(WORLD.floorZ);
         // Plants by the glTF's material colours (every mesh is auto-named): the flowers are
         // f06193, the foliage and fern fronds 4bb150 and df9b45, and the small 8ec44b pieces
         // are fern tips; the large 8ec44b mound is the hill.
@@ -1645,9 +1861,11 @@ function stepSimulation() {
           if (Math.hypot(x - gcenter.x, y - gcenter.y) > flight.bounds.r - cell) continue;
           const hit = groundUnder(solidMeshes, x, y);
           if (hit && hit.point.z < WORLD.floorZ + WORLD.floorBand) ok[j * n + i] = 1;
-          else if (hit && isPlant(hit.object)) plant[j * n + i] = 1;
+          else if (hit) { top[j * n + i] = hit.point.z; if (isPlant(hit.object)) plant[j * n + i] = 1; }   // an obstacle, and how tall
         }
-        world.ground = { x0, y0, cell, n, ok, plant };
+        world.ground = { x0, y0, cell, n, ok, plant, top };
+        let walkableCells = 0; for (const v of ok) walkableCells += v;
+        const sackTop = sack ? new THREE.Box3().setFromObject(sack).max.z : WORLD.floorZ;
         // The sugar goes on open floor: the nearest cell to its nominal spot whose 5x5
         // surroundings are all floor (a first placement put it half inside a rock), and its
         // footprint then becomes an obstacle the feet stop at.
@@ -1665,9 +1883,14 @@ function stepSimulation() {
           sack.updateMatrixWorld(true);
           for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
             const cx = x0 + (i + 0.5) * cell, cy = y0 + (j + 0.5) * cell;
-            if (Math.hypot(cx - world.sugar.x, cy - world.sugar.y) < world.sugar.r + 0.02) ok[j * n + i] = 0;
+            if (Math.hypot(cx - world.sugar.x, cy - world.sugar.y) < world.sugar.r + 0.02) { ok[j * n + i] = 0; top[j * n + i] = Math.max(top[j * n + i], sackTop); }
           }
         }
+        // The body's own size: a cell is clear for the root only when every cell within
+        // WORLD.bodyRadius is floor, so the fly walks and lands beside things, not into them.
+        world.ground.clear = erodeOk(ok, n, WORLD.bodyRadius / cell);
+        let clearCells = 0; for (const v of world.ground.clear) clearCells += v;
+        console.info(`walkable floor: ${walkableCells} cells, ${clearCells} clear for the body`);
       }
       solidMeshes.push(...sackMeshes);   // solid for the ball, after the sack has found its spot
       viewOccluders.push(...solidMeshes);
@@ -1757,6 +1980,53 @@ function stepSimulation() {
       rim.intensity  = REST_LIGHT.rim  * day * (1 + 0.3 * u);
       scene.backgroundIntensity = REST_LIGHT.bg * (0.45 + 0.55 * day) * (1 + 0.25 * u);
       if (scene.fog instanceof THREE.Fog) scene.fog.color.setRGB((0.80 + 0.12 * u) * day, (0.92 + 0.06 * u) * day, (0.94 + 0.04 * u) * day);
+    }
+
+    // ---- the eyes: six 90-degree faces rendered from the head (world axes, see EYE_AXES),
+    // read back, and sampled once per photoreceptor. The fly's own body is hidden for these
+    // renders (an eye does not see its own head); the loom sphere, the ball, the plants, the
+    // day's lights and shadows are all in it. A few times a second, by quality level.
+    const eyeSize = EYE.faceSize;
+    const eyeTargets = EYE_AXES.map(() => new THREE.WebGLRenderTarget(eyeSize, eyeSize, { depthBuffer: true, stencilBuffer: false }));
+    const eyeCams = EYE_AXES.map((a, k) => { const c = new THREE.PerspectiveCamera(90, 1, 0.005, 40); c.up.set(EYE_UPS[k][0], EYE_UPS[k][1], EYE_UPS[k][2]); return c; });
+    const eyeFaces: EyeFaces = { size: eyeSize, data: EYE_AXES.map(() => new Uint8Array(eyeSize * eyeSize * 4)), t: 0 };
+    const eyeHead = mujoco.mj_name2id(model, 1, 'head');
+    const eyePos = new THREE.Vector3(), eyeLook = new THREE.Vector3();
+    let eyeAt = 0;
+    function stepEyes(now: number) {
+      if (!vision.retina || !world.enabled || eyeHead < 0 || now < eyeAt) return;
+      eyeAt = now + 1000 / EYE.fps[quality.level];
+      eyePos.set(data.xpos[eyeHead * 3], data.xpos[eyeHead * 3 + 1], data.xpos[eyeHead * 3 + 2]);
+      const shown: THREE.Mesh[] = [];
+      for (const g of geomNodes) if (g.mesh.visible) { g.mesh.visible = false; shown.push(g.mesh); }
+      for (let k = 0; k < 6; k++) {
+        const c = eyeCams[k]; c.position.copy(eyePos);
+        eyeLook.copy(eyePos).add(new THREE.Vector3(EYE_AXES[k][0], EYE_AXES[k][1], EYE_AXES[k][2]));
+        c.lookAt(eyeLook);
+        renderer.setRenderTarget(eyeTargets[k]); renderer.render(scene, c);
+        renderer.readRenderTargetPixels(eyeTargets[k], 0, 0, eyeSize, eyeSize, eyeFaces.data[k]);
+      }
+      renderer.setRenderTarget(null);
+      for (const m of shown) m.visible = true;
+      eyeFaces.t = now;
+      vision.faces = eyeFaces;
+      sampleRetina(data, vision.retina, eyeFaces, world.t, brain.stimDrive);
+    }
+    // what the eyes see, for Inspect: one dot per R1-6 cell at its azimuth and elevation
+    const eyeCanvas = document.getElementById('eyes') as HTMLCanvasElement | null;
+    function drawEyes() {
+      const r = vision.retina, cv = eyeCanvas; if (!r || !cv) return;
+      const ctx = cv.getContext('2d'); if (!ctx) return;
+      const W = cv.width, H = cv.height, half = W / 2, azSpan = 170, elSpan = 130;
+      ctx.fillStyle = '#100d13'; ctx.fillRect(0, 0, W, H);
+      for (let i = 0; i < r.n; i++) {
+        if (r.type[i] !== 0) continue;
+        // left eye on the left, azimuth growing toward the rear (outward); the midline at the centre
+        const u = (r.az[i] + 15) / azSpan, v = (65 - r.el[i]) / elSpan;
+        const x = r.eye[i] === 0 ? half - u * half : half + u * half, y = v * H;
+        const g = Math.round(20 + 235 * Math.min(1, r.lum[i]));
+        ctx.fillStyle = `rgb(${g},${g},${g})`; ctx.fillRect(x - 1, y - 1, 2, 2);
+      }
     }
 
     // ---- sound: a wingbeat tone while the wings stroke and a soft tick as each tripod lands,
@@ -2006,7 +2276,7 @@ function stepSimulation() {
         for (const [k, rate] of SENSE_ROWS) {   // the loop: world -> switch -> neurons
           const wl = (world.levels as Record<string, number>)[k];
           $('w_' + k).textContent = world.enabled && wl !== undefined ? wl.toFixed(2) : '–';
-          $('x_' + k).textContent = (stimSwitch[k] || 0) > 0 ? (stimSwitch[k] || 0).toFixed(2) : k === 'touch' && stimPulse.touch[0] + stimPulse.touch[1] > 0 ? 'tap' : k === 'looming' && loom.active ? 'loom' : '–';
+          $('x_' + k).textContent = (stimSwitch[k] || 0) > 0 ? (stimSwitch[k] || 0).toFixed(2) : k === 'touch' && stimPulse.touch && stimPulse.touch[0] + stimPulse.touch[1] > 0 ? 'tap' : k === 'looming' && loom.active ? 'loom' : '–';
           $('s_' + k).textContent = rate().toFixed(0) + ' Hz';
         }
         $('s_mnp').textContent  = brain.rate.mn_proboscis.toFixed(1) + ' Hz';
@@ -2021,6 +2291,9 @@ function stepSimulation() {
         $('s_flight').textContent = `${flight.state}; ${flight.count} flights, ${flight.walk.count} walks`;
         $('s_escape').textContent = flight.escape.toFixed(0) + ' Hz';
         const wl = world.levels;
+        const R = vision.retina;
+        $('s_eyes').textContent = R && vision.active ? `${R.meanEye[0].toFixed(2)} / ${R.meanEye[1].toFixed(2)} / ${R.meanEye[2].toFixed(2)} (${R.n.toLocaleString()} cells, ${EYE.fps[quality.level]} renders/s)` : R ? 'eyes off (world off)' : 'no retina';
+        drawEyes();
         $('s_day').textContent = world.enabled ? `${(world.day * 100).toFixed(0)}% daylight` : 'off';
         $('s_sugar_d').textContent = world.sugar.placed ? `${world.sugarDist.toFixed(2)} cm · ${Math.round(world.sugar.amount * 100)} % left` : '–';
         $('s_wtaste').textContent = `${wl.sweet.toFixed(2)} / ${wl.sweetLeg.toFixed(2)} / ${wl.bitter.toFixed(0)} / ${wl.odour.toFixed(2)}`;
@@ -2031,6 +2304,7 @@ function stepSimulation() {
       $('s_cnt').textContent  = brain.sugarFeedSpikes.toLocaleString();
 
       if (!sim.paused) stepBall(wall);
+      stepEyes(now);
       stepSack();
       stepSound();
       stepRipples(wall);
@@ -2070,7 +2344,7 @@ function stepSimulation() {
                    world, WORLD, walkable, nearestWalkable, plantAt, stimWorld, stepWorld, groom, GROOM,
                    sync: () => syncGeoms(model, data),
                    stepBall, get ball() { return ball; }, get ballWorld() { return ballWorld; },
-                   occlusion: occ, statusSentence, sound,
+                   occlusion: occ, statusSentence, sound, vision, EYE, stepEyes, sampleRetina, facePixel, THREE,
                    dbg: () => ({ paused: sim.paused, acc, steps: sim.steps, time: data.time,
                                  nodes: geomNodes.length,
                                  brainMs: brain.ms, sugar: brain.sugar,

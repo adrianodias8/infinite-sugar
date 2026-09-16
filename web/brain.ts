@@ -64,6 +64,8 @@ export class Brain {
   declare stimDrive: number;
   declare stimGain: Record<string, number>;
   declare _active: ActiveStimulus[];
+  declare _cellIdx: Int32Array | null;   // per-cell drive (the eyes): neuron indices and membrane units per ms
+  declare _cellAmt: Float32Array | null;
   declare sugar: number;
   declare feedSpikes: number;
   declare sugarFeedSpikes: number;
@@ -165,6 +167,7 @@ export class Brain {
     // tools/response_matrix.py applies the same gain so the NumPy reference agrees.
     this.stimGain = { heat: 2.5 };
     this._active = [];           // rebuilt by setStim()
+    this._cellIdx = null; this._cellAmt = null;
     this.sugar = 0;
     this.feedSpikes = 0;         // running total: proboscis + ingestion MN spikes
     this.sugarFeedSpikes = 0;    // same populations, counted only while sugar is enabled
@@ -210,6 +213,14 @@ export class Brain {
       for (const p of sides[l > r ? 0 : 1]) { const g = this.groups[p]; if (g) this._active.push({ idx: g, amt: extra * gain }); }
     }
     this.sugar = this.stim.sweet;   // the counter counts feeding: labellar sugar, not the feet
+  }
+
+  // A drive per neuron rather than per pool, in membrane units per millisecond: the eyes drive
+  // each photoreceptor by the brightness it sees (web/app.ts, vision). Pass null to clear. The
+  // arrays are used in place and must stay the same length; the caller owns them.
+  setCellDrive(idx: Int32Array | null, amt: Float32Array | null) {
+    if (idx && amt && idx.length !== amt.length) throw new Error('setCellDrive: idx and amt lengths differ');
+    this._cellIdx = idx; this._cellAmt = idx ? amt : null;
   }
 
   // Spikes in a pool during the last millisecond stepped (0 for an unknown pool).
@@ -266,6 +277,8 @@ export class Brain {
         const idx = active[a].idx, amt = active[a].amt;
         for (let k = 0; k < idx.length; k++) v[idx[k]] += amt;
       }
+      const cidx = this._cellIdx, camt = this._cellAmt;
+      if (cidx && camt) for (let k = 0; k < cidx.length; k++) v[cidx[k]] += camt[k];
 
       let ns = 0;
       for (let i = 0; i < N; i++) {
