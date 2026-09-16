@@ -37,7 +37,7 @@ function run(seed, seconds) {
   const sim = { steps:0, brainStartMs:0 };
   const context = vm.createContext({ mujoco, model, data, brain, sim, performance });
   vm.runInContext(app.slice(start, end) + `
-globalThis.controller = { resetSim, buildDriveMap, buildShuffleMap, buildFlightMap, buildWorldMap, stepSimulation, flight, world, shuffle, groom };`, context);
+globalThis.controller = { resetSim, buildDriveMap, buildShuffleMap, buildFlightMap, buildWorldMap, stepSimulation, stepMs, flight, world, shuffle, groom };`, context);
   const c = context.controller;
   c.resetSim(); c.buildDriveMap(model, brain); c.buildShuffleMap(); c.buildFlightMap(); c.buildWorldMap();
   c.flight.seed = seed;
@@ -45,7 +45,7 @@ globalThis.controller = { resetSim, buildDriveMap, buildShuffleMap, buildFlightM
   for (let ms = 0; ms < seconds * 1000; ms++) {
     if (ms === 3000) brain.setStim('looming', 1);
     if (ms === 3300) brain.setStim('looming', 0);
-    for (let i = 0; i < 10; i++) c.stepSimulation();
+    c.stepMs();
     if (ms % 100 === 99) samples.push({ ms, qpos: Array.from(data.qpos), spikes: brain.feedSpikes, state: c.flight.state, z: c.flight.z, levels: { ...c.world.levels } });
   }
   return { samples, flights: c.flight.count, walks: c.flight.walk.count, shuffles: c.shuffle.count, t: data.time, brainMs: brain.ms };

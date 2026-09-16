@@ -28,12 +28,14 @@ The local server builds once at startup; restart it after editing source files.
 
 ## Controls
 
-Name the fly to begin. Drag to orbit and scroll to zoom. Tap the fly to touch it. The fly lives
+Name the fly to begin. Drag to orbit and scroll to zoom. Tap the fly to touch it; drag the
+beach ball to pick it up, roll it at the fly or throw it (it looms, bumps and is seen). The fly lives
 on its own: it sees the terrarium through its own photoreceptors, smells the sugar sack, walks
 in bouts when its walking neurons ask, feeds when it reaches the sugar, takes off when
 something looms, turns away from threats and toward smells, and lands wherever it is calm (see
 [docs/13-world.md](docs/13-world.md) and [docs/15-vision.md](docs/15-vision.md)). World, Sugar, pause,
-recenter and sound controls sit below the fly. World switches the terrarium's senses off; Sugar
+recenter, speed and sound controls sit below the fly. Speed asks for 1×, 2× or 4× simulated
+time per real second; Inspect shows what the machine achieves. World switches the terrarium's senses off; Sugar
 overrides with infinite sugar wherever the fly is; sound (off by default) is a wingbeat tone
 and a tick per step, synthesised from the same state that draws them. The environment strip
 forces the other senses: touch, heat, cool, odour, bitter and damp are switches, Light also

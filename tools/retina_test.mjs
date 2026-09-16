@@ -39,11 +39,11 @@ const app = fs.readFileSync('dist/app.js', 'utf8');
 const start = app.indexOf('// ---------------------------------------------------------------- pose hold');
 const end = app.indexOf('// ---------------------------------------------------------------- main', start);
 vm.runInContext(app.slice(start, end) + `
-globalThis.controller = { resetSim, buildDriveMap, buildShuffleMap, buildFlightMap, buildWorldMap, stepSimulation, stepWorld, world, WORLD, flight, vision, EYE, EYE_AXES, buildRetina, facePixel, sampleRetina, stimWorld };`, context);
+globalThis.controller = { resetSim, buildDriveMap, buildShuffleMap, buildFlightMap, buildWorldMap, stepSimulation, stepMs, stepWorld, world, WORLD, flight, vision, EYE, EYE_AXES, buildRetina, facePixel, sampleRetina, stimWorld };`, context);
 const c = context.controller;
 c.resetSim(); c.buildDriveMap(model, brain); c.buildShuffleMap(); c.buildFlightMap(); c.buildWorldMap();
 c.flight.enabled = false;
-const advance = (s) => { for (let i = 0; i < Math.round(s * 10000); i++) c.stepSimulation(); };
+const advance = (s) => { for (let i = 0; i < Math.round(s * 1000); i++) c.stepMs(); };
 
 // the head basis at rest: forward is the world +x, up is +z
 const R = c.buildRetina(retina);

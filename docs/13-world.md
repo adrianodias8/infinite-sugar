@@ -139,6 +139,16 @@ with no change in the hind claw height, so the standing pose stays as the model 
 
 Every level is brain-tick state, so a slow device still feeds the same world to the same brain.
 
+**Physics runs five substeps per brain millisecond**, not ten. flybody's XML says 0.1 ms; the
+model is set to 0.2 ms at reset (`PHYS_SUBSTEPS`, the upstream file untouched). Measured
+standing 3 s: height drift 0.0001 cm, root velocity 0.0025 at rest, every suite unchanged;
+the solver's iteration count made no difference (the Newton solver converges early). Cost per
+simulated second in node on the build machine: physics 2.8 → 1.4 s, the brain 1.1 s, the world,
+actuators and gait under 0.06 s; a simulated second went from 4.7 to about 3.3 s of wall time.
+The brain's kernel is the next cost and stays JavaScript for now. A speed control (1× / 2× /
+4×) only changes how much simulated time a frame asks for; Inspect shows what the machine
+achieves.
+
 ## The fly decides
 
 | decision | neurons | measured |
@@ -173,10 +183,14 @@ its calibrated rest while the fly stands, the front legs lift and rub forward ov
 0.9 s at 4 Hz (the motion is ours); a quiet DNg11 never grooms. Walking stays on the
 walkable floor: a 56 × 56 map sampled at load from the terrarium's own opaque meshes (floor
 hits between −0.10 and +0.10; the hill, rocks, plants, frame and the sack are obstacles). The
-body has a size: the floor map is eroded by `WORLD.bodyRadius` (0.09 cm; the thorax is 0.05
-wide, the legs reach 0.18, and the perch sits 0.1 from the fern's base), and the root walks
-and lands only on cells whose whole radius is floor — the legs may overlap an edge, the body
-never enters a rock or a plant. Each obstacle cell also records how tall the thing is (the
+body has a size: each floor cell records its distance to the nearest obstacle, and a cell is
+clear for the root only when that distance exceeds `WORLD.bodyRadius` (0.14 cm; the thorax is
+0.05 wide, the legs reach 0.18, the folded wings 0.21 behind). The root lands only on clear
+cells and walks onto clear cells freely; from a tight spot — the perch is 0.1 from the fern's
+base, so the start is not clear — it may step onto floor no nearer an obstacle than where it
+stands, so it walks out but never further in, and never onto anything but floor. The sugar
+sack is exempt from the erosion (soft; the fly leans on it to feed) and only its own
+footprint is kept off-limits. Each obstacle cell also records how tall the thing is (the
 first hit from above; the sack its own height), so a flight keeps `WORLD.bodyClearance`
 (0.15, the body's half-height) above whatever is under it and under the point 0.35 cm ahead,
 climbing when it can, and what is too tall to clear under the roof (the tall plants reach
@@ -204,10 +218,10 @@ closing from the left looms on the left eye only (0.50 / 0.00) and a receding ba
 bump from the ball is a touch on that flank and releases; switching the world off clears every
 level.
 
-Clearance, measured: the terrarium's 929 floor cells erode to 691 the body fits on; in a
+Clearance, measured: the terrarium's 929 floor cells erode to 600 the body fits on; in a
 30 s headless run with two flights and eleven walking bouts the root was never on a cell it
-did not fit (standing or walking) and never closer than 0.15 above what was under it in the
-air (`tools/world_test.mjs` and `tools/flight_test.mjs` cover the erosion, the top map, a ridge
+did not fit (standing or walking) except the perch it started on and its first step away,
+and never closer than 0.15 above what was under it in the air (`tools/world_test.mjs` and `tools/flight_test.mjs` cover the erosion, the top map, a ridge
 flown over with the clearance kept, and a wall too tall for the glass never approached within
 the body's radius). Before this the root could be carried through a rock or a plant: the floor
 map was checked at the point under the root only, and the air had no obstacles at all.

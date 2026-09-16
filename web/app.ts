@@ -41,7 +41,7 @@ let mujoco: MujocoModule;
 let model: MjModel;
 let data: MjData;
 let brain: Brain;
-const sim = { paused:false, steps:0, t0:0, brainStartMs:0 };
+const sim = { paused:false, steps:0, t0:0, brainStartMs:0, speed:1 };   // speed: how many simulated seconds a real second asks for (Inspect shows what it gets)
 const geomNodes: GeomNode[] = [];
 const tmpMat = new THREE.Matrix4();
 
@@ -462,6 +462,7 @@ function captureHoldPose(m: MjModel, d: MjData) {
   return c;
 }
 function resetSim() {
+  configurePhysics();
   mujoco.mj_resetDataKeyframe(model, data, 0);
   holdCtrl = captureHoldPose(model, data);
   data.ctrl.set(holdCtrl);
@@ -900,13 +901,15 @@ const WORLD = {
   objectRange: 1.5, objectRate: 2.0,   // a small object crossing the view within objectRange at objectRate rad/s drives LC11 fully
   floorZ: -0.132,      // the physics floor; the terrarium's visual floor undulates just above it
   floorBand: 0.23,     // ground hits up to this far above floorZ count as walkable floor (the floor undulates to +0.10)
-  bodyRadius: 0.09,    // cm round the root that must be floor for the body to stand or land there (the thorax is 0.05 wide, the legs reach 0.18; the perch sits 0.1 from the fern's base, so the legs may overlap an edge, the body never does)
+  bodyRadius: 0.14,    // cm round the root that must be floor for the body to stand or land there (the thorax is 0.05 wide, the legs reach 0.18, the folded wings 0.21 behind); the sack is exempt — the fly may lean on it to feed
   bodyClearance: 0.15, // cm the root must stay above the top of anything under it while airborne (the body's half-height is 0.14)
 };
 type Loomer = { x: number, y: number, z: number, vx: number, vy: number, vz: number, r: number, name: string };
 // plant: a cell occupied by foliage or flowers; clear: floor cells with no obstacle within WORLD.bodyRadius (the body fits);
-// top: the height of the highest solid thing over each cell (floorZ for floor cells), for flying over and around things.
-type GroundMap = { x0: number, y0: number, cell: number, n: number, ok: Uint8Array, plant: Uint8Array, clear?: Uint8Array, top?: Float32Array };
+// dist: distance in cells from each cell to the nearest obstacle (the sack not counted), so a body that starts
+// in a tight spot may walk out but never further in; top: the height of the highest solid thing over each
+// cell (floorZ for floor cells), for flying over and around things.
+type GroundMap = { x0: number, y0: number, cell: number, n: number, ok: Uint8Array, plant: Uint8Array, clear?: Uint8Array, dist?: Float32Array, top?: Float32Array };
 const world = {
   enabled: true, t: 0, day: 1, shade: 0, sugarDist: 0,
   bright: 1, contrast: 0,                                // brightness at the fly and its filtered rate of change
@@ -944,20 +947,37 @@ function bodyClear(x: number, y: number) {
   if (i < 0 || j < 0 || i >= g.n || j >= g.n) return false;
   return (g.clear || g.ok)[j * g.n + i] === 1;
 }
+// Distance (in cells) from every cell to the nearest non-floor cell or the map's edge, out to
+// `reach`; a cell at distance d has floor everywhere within d. Brute force over a small window.
+function obstacleDistance(ok: Uint8Array, n: number, reach: number) {
+  const dist = new Float32Array(n * n), R = Math.ceil(reach) + 1;
+  for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
+    if (ok[j * n + i] !== 1) { dist[j * n + i] = 0; continue; }
+    let best = reach + 1;
+    for (let dj = -R; dj <= R; dj++) for (let di = -R; di <= R; di++) {
+      const d2 = di * di + dj * dj; if (d2 >= best * best) continue;
+      const ii = i + di, jj = j + dj;
+      if (ii < 0 || jj < 0 || ii >= n || jj >= n || ok[jj * n + ii] !== 1) best = Math.sqrt(d2);
+    }
+    dist[j * n + i] = best;
+  }
+  return dist;
+}
 // Erode the floor by the body's radius: a cell stays clear only if every cell within r is floor.
 function erodeOk(ok: Uint8Array, n: number, r: number) {
-  const clear = new Uint8Array(n * n), R = Math.ceil(r);
-  for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
-    if (ok[j * n + i] !== 1) continue;
-    let fits = 1;
-    for (let dj = -R; dj <= R && fits; dj++) for (let di = -R; di <= R; di++) {
-      if (di * di + dj * dj > r * r) continue;
-      const ii = i + di, jj = j + dj;
-      if (ii < 0 || jj < 0 || ii >= n || jj >= n || ok[jj * n + ii] !== 1) { fits = 0; break; }
-    }
-    clear[j * n + i] = fits;
-  }
+  const dist = obstacleDistance(ok, n, r), clear = new Uint8Array(n * n);
+  for (let k = 0; k < n * n; k++) clear[k] = ok[k] === 1 && dist[k] > r ? 1 : 0;
   return clear;
+}
+// May the body step from here to there? Onto a clear cell always; from a tight spot (a start
+// beside something, the perch is 0.1 from the fern) onto floor no nearer to an obstacle than
+// where it stands, so it can walk out but never further in; never onto anything but floor.
+function canStep(fromX: number, fromY: number, toX: number, toY: number) {
+  if (bodyClear(toX, toY)) return true;
+  const g = world.ground, dist = g?.dist;
+  if (!g || !dist || !walkable(toX, toY)) return false;
+  const at = (x: number, y: number) => { const i = Math.floor((x - g.x0) / g.cell), j = Math.floor((y - g.y0) / g.cell); return i < 0 || j < 0 || i >= g.n || j >= g.n ? 0 : dist[j * g.n + i]; };
+  return at(toX, toY) >= at(fromX, fromY);
 }
 // The highest solid thing within the body's radius of a point (floorZ where there is only floor).
 function topOver(x: number, y: number) {
@@ -1413,15 +1433,15 @@ function stepFlight(b: BrainLike, d: MjData, dt: number) {
     W.bout -= dt;
     speed = WALK.speed * (W.dir > 0 ? 1 : -0.6); yawRate = flight.asym * WALK.yawRate;
     const nx = flight.x + speed * Math.cos(flight.yaw) * 0.05, ny = flight.y + speed * Math.sin(flight.yaw) * 0.05;
-    if (!bodyClear(nx, ny)) {
+    if (!canStep(flight.x, flight.y, nx, ny)) {
       // An obstacle or the edge of the floor: the bout is spent turning toward open floor
       // (supplied), so the brain's next bout can go somewhere. Ending the bout instead left
       // the fly facing the same obstacle for good.
       if (!W.turning) { W.blocked++; W.turning = true; }
       speed = 0;
       const look = 0.08, a = flight.yaw + (W.dir > 0 ? 0 : Math.PI);
-      const left = bodyClear(flight.x + look * Math.cos(a + 1.0), flight.y + look * Math.sin(a + 1.0));
-      const right = bodyClear(flight.x + look * Math.cos(a - 1.0), flight.y + look * Math.sin(a - 1.0));
+      const left = canStep(flight.x, flight.y, flight.x + look * Math.cos(a + 1.0), flight.y + look * Math.sin(a + 1.0));
+      const right = canStep(flight.x, flight.y, flight.x + look * Math.cos(a - 1.0), flight.y + look * Math.sin(a - 1.0));
       yawRate += (left && !right ? 1 : right && !left ? -1 : W.turnSign) * WALK.yawRate;
     } else W.turning = false;
     zTarget = flight.standZ + WALK.lift; W.settle = 0;
@@ -1631,13 +1651,21 @@ function stepFlightLegs(d: MjData) {
   }
 }
 
+// Physics substeps per brain millisecond. flybody's XML says 0.1 ms (ten per brain tick); the
+// body stands, walks, lands and settles identically at 0.2 ms (measured: height drift 0.0001
+// over 3 s, root velocity 0.0025 at rest, the flight and shuffle suites unchanged) for half the
+// cost, and physics was 60 % of the frame. Set on the model at reset, not in the upstream XML.
+const PHYS_SUBSTEPS = 5;
+const PHYS_TIMESTEP = 0.001 / PHYS_SUBSTEPS;
+function configurePhysics() { model.opt.timestep = PHYS_TIMESTEP; }
 function stepSimulation() {
   writeFlightPose(data);
   mujoco.mj_step(model, data);
   sim.steps++;
-  // Exactly one brain millisecond per ten physics steps, including the frame's compute budget.
-  // Neither calibration nor a body reset can put the brain ahead and freeze neural updates.
-  if (sim.steps % 10 === 0) {
+  // Exactly one brain millisecond per PHYS_SUBSTEPS physics steps, including the frame's
+  // compute budget. Neither calibration nor a body reset can put the brain ahead and freeze
+  // neural updates.
+  if (sim.steps % PHYS_SUBSTEPS === 0) {
     brain.step(1);
     stepWorld(data, 0.001);
     stepPoke(0.001);
@@ -1648,6 +1676,8 @@ function stepSimulation() {
     else { stepFlightLegs(data); groom.active = false; }
   }
 }
+// One brain millisecond: the physics substeps that make it up.
+function stepMs() { for (let i = 0; i < PHYS_SUBSTEPS; i++) stepSimulation(); }
 
 // ---------------------------------------------------------------- main
 (async function main() {
@@ -1866,6 +1896,14 @@ function stepSimulation() {
         world.ground = { x0, y0, cell, n, ok, plant, top };
         let walkableCells = 0; for (const v of ok) walkableCells += v;
         const sackTop = sack ? new THREE.Box3().setFromObject(sack).max.z : WORLD.floorZ;
+        // The body's own size, before the sack is placed: a cell is clear for the root only when
+        // every cell within WORLD.bodyRadius is floor (rocks, plants, the hill, the frame). The
+        // sack is soft and the fly may lean on it to feed, so it does not erode the floor around
+        // it; its footprint alone is kept off-limits below.
+        const rCells = WORLD.bodyRadius / cell;
+        world.ground.dist = obstacleDistance(ok, n, rCells);
+        world.ground.clear = new Uint8Array(n * n);
+        for (let k = 0; k < n * n; k++) world.ground.clear[k] = ok[k] === 1 && world.ground.dist[k] > rCells ? 1 : 0;
         // The sugar goes on open floor: the nearest cell to its nominal spot whose 5x5
         // surroundings are all floor (a first placement put it half inside a rock), and its
         // footprint then becomes an obstacle the feet stop at.
@@ -1883,12 +1921,9 @@ function stepSimulation() {
           sack.updateMatrixWorld(true);
           for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
             const cx = x0 + (i + 0.5) * cell, cy = y0 + (j + 0.5) * cell;
-            if (Math.hypot(cx - world.sugar.x, cy - world.sugar.y) < world.sugar.r + 0.02) { ok[j * n + i] = 0; top[j * n + i] = Math.max(top[j * n + i], sackTop); }
+            if (Math.hypot(cx - world.sugar.x, cy - world.sugar.y) < world.sugar.r + 0.02) { ok[j * n + i] = 0; world.ground.clear[j * n + i] = 0; world.ground.dist[j * n + i] = 0; top[j * n + i] = Math.max(top[j * n + i], sackTop); }
           }
         }
-        // The body's own size: a cell is clear for the root only when every cell within
-        // WORLD.bodyRadius is floor, so the fly walks and lands beside things, not into them.
-        world.ground.clear = erodeOk(ok, n, WORLD.bodyRadius / cell);
         let clearCells = 0; for (const v of world.ground.clear) clearCells += v;
         console.info(`walkable floor: ${walkableCells} cells, ${clearCells} clear for the body`);
       }
@@ -1905,6 +1940,14 @@ function stepSimulation() {
     buildWorldMap();
     // Sugar comes from the world (the sack) unless the switch overrides it.
     stimSwitch.sweet = 0; applyStim('sweet'); stimSwitch.sweetLeg = 0; applyStim('sweetLeg');
+    // Speed: the brain's millisecond and the physics behind it are fixed; this only changes how
+    // many of them a frame asks for. On a machine that keeps up, 2x and 4x run the fly faster
+    // than real time; the achieved factor is in Inspect (real-time) either way.
+    const SPEEDS = [1, 2, 4];
+    $('b_speed').onclick = (e) => {
+      sim.speed = SPEEDS[(SPEEDS.indexOf(sim.speed) + 1) % SPEEDS.length];
+      if (e.currentTarget instanceof HTMLElement) { e.currentTarget.textContent = `${sim.speed}×`; e.currentTarget.classList.toggle('on', sim.speed !== 1); e.currentTarget.setAttribute('aria-pressed', String(sim.speed !== 1)); }
+    };
     $('b_world').onclick = (e) => {
       world.enabled = !world.enabled;
       if (e.currentTarget instanceof HTMLElement) {
@@ -2173,14 +2216,68 @@ function stepSimulation() {
         if (u >= 1) { scene.remove(r.sprite); r.sprite.visible = false; ripplePool.push(r.sprite); ripples.splice(i, 1); }
       }
     }
+    // ---- the hand in the terrarium: a tap on the fly is a touch; a drag on the ball moves it.
+    // The ball stays a dynamic cannon-es body while held (so it still collides with the fly's
+    // proxy and the terrain): each frame its velocity is set to carry it to where the pointer
+    // points on the horizontal plane through its centre, capped, and on release it keeps the
+    // last velocity, so it can be rolled at the fly, thrown past it, or set down. What the fly
+    // makes of it is the world's business: the ball looms by its real approach, bumps as a
+    // touch, and is seen by the eyes.
     const tap = { x:0, y:0, t:0, id:-1 };
-    renderer.domElement.addEventListener('pointerdown', e => { tap.x = e.clientX; tap.y = e.clientY; tap.t = performance.now(); tap.id = e.pointerId; });
+    const grab = { active: false, id: -1, planeZ: 0, tx: 0, ty: 0, vx: 0, vy: 0, lastT: 0, lastX: 0, lastY: 0 };
+    const grabPlane = new THREE.Plane(), grabPoint = new THREE.Vector3(), grabRay = new THREE.Raycaster();
+    const GRAB = { maxSpeed: 4.0, gain: 12 };   // cm/s cap while held; how eagerly the ball follows the pointer (1/s)
+    function pointerOnPlane(clientX: number, clientY: number) {
+      grabRay.setFromCamera(new THREE.Vector2(clientX / innerWidth * 2 - 1, -(clientY / innerHeight) * 2 + 1), camera);
+      return grabRay.ray.intersectPlane(grabPlane, grabPoint) ? grabPoint : null;
+    }
+    function ballUnder(clientX: number, clientY: number) {
+      if (!ball) return false;
+      grabRay.setFromCamera(new THREE.Vector2(clientX / innerWidth * 2 - 1, -(clientY / innerHeight) * 2 + 1), camera);
+      return grabRay.intersectObject(ball.wrap, true).length > 0;
+    }
+    function stepGrab(dt: number) {
+      if (!grab.active || !ball || dt <= 0) return;
+      const p = ball.body.position;
+      let vx = (grab.tx - p.x) * GRAB.gain, vy = (grab.ty - p.y) * GRAB.gain;
+      const sp = Math.hypot(vx, vy); if (sp > GRAB.maxSpeed) { vx *= GRAB.maxSpeed / sp; vy *= GRAB.maxSpeed / sp; }
+      ball.body.velocity.x = vx; ball.body.velocity.y = vy; ball.body.wakeUp();
+    }
+    renderer.domElement.addEventListener('pointerdown', e => {
+      tap.x = e.clientX; tap.y = e.clientY; tap.t = performance.now(); tap.id = e.pointerId;
+      if (ball && ballUnder(e.clientX, e.clientY)) {
+        grab.active = true; grab.id = e.pointerId; grab.planeZ = ball.body.position.z;
+        grabPlane.set(new THREE.Vector3(0, 0, 1), -grab.planeZ);
+        grab.tx = ball.body.position.x; grab.ty = ball.body.position.y; grab.vx = grab.vy = 0; grab.lastT = performance.now(); grab.lastX = grab.tx; grab.lastY = grab.ty;
+        controls.enabled = false; renderer.domElement.setPointerCapture(e.pointerId); renderer.domElement.style.cursor = 'grabbing';
+      }
+    });
+    renderer.domElement.addEventListener('pointermove', e => {
+      if (!grab.active || e.pointerId !== grab.id) return;
+      const q = pointerOnPlane(e.clientX, e.clientY); if (!q) return;
+      const now = performance.now(), dt = Math.max(1e-3, (now - grab.lastT) / 1000);
+      grab.vx = (q.x - grab.lastX) / dt; grab.vy = (q.y - grab.lastY) / dt;   // the hand's own speed, for the throw
+      grab.tx = q.x; grab.ty = q.y; grab.lastX = q.x; grab.lastY = q.y; grab.lastT = now;
+    });
+    const release = (e: PointerEvent) => {
+      if (!grab.active || e.pointerId !== grab.id) return;
+      grab.active = false; grab.id = -1; controls.enabled = true; renderer.domElement.style.cursor = '';
+      if (ball) {   // thrown: the hand's speed over the last move, if the hand was still moving
+        const stale = performance.now() - grab.lastT > 120;
+        const sp = Math.hypot(grab.vx, grab.vy), cap = 2 * GRAB.maxSpeed;
+        const k = stale ? 0 : sp > cap ? cap / sp : 1;
+        ball.body.velocity.x = grab.vx * k; ball.body.velocity.y = grab.vy * k; ball.body.wakeUp();
+      }
+      tap.id = -1;   // a drag is not a tap
+    };
     renderer.domElement.addEventListener('pointerup', e => {
+      if (grab.active && e.pointerId === grab.id) { release(e); return; }
       if (e.pointerId !== tap.id) return;
       tap.id = -1;
       if (Math.hypot(e.clientX - tap.x, e.clientY - tap.y) > 8 || performance.now() - tap.t > 350) return;
       pokeAtScreen(e.clientX, e.clientY);
     });
+    renderer.domElement.addEventListener('pointercancel', release);
 
     for (const [triggerId, dialogId] of [['b_about', 'about'], ['b_inspect', 'inspect']]) {
       const dialog = $(dialogId);
@@ -2222,7 +2319,7 @@ function stepSimulation() {
     $('b_about').click();
 
     // ---- loop
-    const timestep = 1e-4;                          // flybody's opt.timestep
+    const timestep = PHYS_TIMESTEP;                 // see PHYS_SUBSTEPS
     let last = performance.now(), acc = 0, fps = 0, fpsT = last, frames = 0, sps = 0, spsN = 0, spsT = last;
     let nextFrameAt = last, mapAt = 0, hudAt = 0, loomShown = false, flightShown = '';
     // Browser suspension must never become a backlog of simulation work on return.
@@ -2245,7 +2342,7 @@ function stepSimulation() {
       last = now;
 
       if (!sim.paused) {
-        acc = Math.min(acc + wall, 0.05);   // never try to 'catch up' more than 50 ms
+        acc = Math.min(acc + wall * sim.speed, 0.05 * sim.speed);   // never try to 'catch up' more than 50 ms (of sped-up time)
         const budget = quality.profile.budgetMs;
         const tStart = performance.now();
         let n = 0;
@@ -2303,7 +2400,8 @@ function stepSimulation() {
       }
       $('s_cnt').textContent  = brain.sugarFeedSpikes.toLocaleString();
 
-      if (!sim.paused) stepBall(wall);
+      stepGrab(wall);
+      if (!sim.paused) stepBall(wall * sim.speed);
       stepEyes(now);
       stepSack();
       stepSound();
@@ -2345,6 +2443,7 @@ function stepSimulation() {
                    sync: () => syncGeoms(model, data),
                    stepBall, get ball() { return ball; }, get ballWorld() { return ballWorld; },
                    occlusion: occ, statusSentence, sound, vision, EYE, stepEyes, sampleRetina, facePixel, THREE,
+                   stepMs, PHYS_SUBSTEPS, bodyClear, canStep, topOver, erodeOk, obstacleDistance, grab, GRAB,
                    dbg: () => ({ paused: sim.paused, acc, steps: sim.steps, time: data.time,
                                  nodes: geomNodes.length,
                                  brainMs: brain.ms, sugar: brain.sugar,
