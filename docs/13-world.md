@@ -88,6 +88,7 @@ DNs +17 %; nothing that moves a joint on its own, which is the honest result.
 | looming | the beach ball, by time to collision from its real position and velocity, on the eye it approaches; the loom sphere by its own event | 1 − τ/1.0 s, scaled by angular size, within 1.2 cm |
 | object (LC11) | a small object crossing the view, by its angular velocity about the fly, on that side | (ω / 2 rad/s), fading as it fills the view, within 1.5 cm |
 | touch | the ball hitting the fly (cannon-es contact), on that flank; a tap | the poke pulse |
+| wind | the draught that carries the odour deflects the antennae (FlyWire's 486 `wind_gravity` JO cells), on the antenna it comes from; the fly's own airspeed in flight adds a headwind on both | 0.3 on the upwind antenna; + 0.3 × airspeed / cruise in the air, capped at 1 |
 | bitter | the labellum against foliage or a flower (plant cells of the floor map, found by the glTF's material colours) | 1 in contact |
 
 **Tasting is by contact, and the reflex is not there.** Labellar and tarsal sugar sensing are
@@ -165,9 +166,9 @@ takes off with the ball still 0.47 cm away. A ball left to roll on its own (0.1 
 
 | decision | neurons | measured |
 |---|---|---|
-| walk forward | DNp09 (`dn_walk`, 2 cells): each spike requests 0.6 s of steps, up to 2 s | 0.6 Hz at rest in the browser kernel |
+| walk forward | DNp09 (`dn_walk`, 2 cells): each spike requests 0.6 s × (0.6 / rest) of steps, up to 2 s — rest-relative, so the resting drive asks for the same share of walking whatever the kernel's rest | 0.6 Hz at rest with the predicted signs, ~1 Hz with the literature-corrected ones |
 | walk backward | MDN (`dn_back`, 4 cells): a 100 ms mean above 2.5 × its calibrated rest | ~6 Hz per cell at rest in the browser kernel, 17 spikes/s for the pool (1 Hz in NumPy), hence rest-relative |
-| turn | DNa01/DNa02 (`dn_steer_l/r`): (L/rest_L − R/rest_R) / 0.6, clamped | L 70 / R 53 Hz at rest; the resting bias now reads as straight |
+| turn | DNa01/DNa02 (`dn_steer_l/r`): (L/rest_L − R/rest_R) / 0.6, clamped | L 70 / R 53 Hz at rest with the predicted signs, 76 / 58 with the corrected ones; the rest is the mean over the last 1.5 s of calibration (a 25 ms snapshot read 67 / 81 and steered in circles) |
 | take off | DNp02/04/11: 100 ms mean of the stronger side above 100 Hz (a loom on one flank drives one side alone) | 0 at rest, ~200 under looming |
 | turn away | DNp02/04/11 asymmetry: −(L − R)/200 | 227 / 0 for a loom on the left |
 | land | escape DNs under 30 Hz for 4 s | 0 at rest |

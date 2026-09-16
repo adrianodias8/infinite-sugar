@@ -19,7 +19,7 @@ const BASE_MAX = 0.06;      // per-neuron tonic drive ~ U(0, BASE_MAX)
 const NOISE_PER_STEP = 300; // sparse random kicks per ms
 const NOISE_KICK = 0.42;
 
-const ROLE_SLOTS = 3;       // pools a neuron may be counted in: union, sub-pool, side
+const ROLE_SLOTS = 4;       // pools a neuron may be counted in: union, sub-pool, side, sub-pool side (a JO wind cell is in mechano, mechano_l, mechano_wind, mechano_wind_l)
 
 type BrainMeta = { N: number, E: number, roles: Record<string, number[]> };
 type ActiveStimulus = { idx: Int32Array, amt: number };
@@ -132,6 +132,7 @@ export class Brain {
       bitter:  ['grn_bitter'],
       odour:   ['orn'],
       touch:   ['mechano'],
+      wind:    ['mechano_wind'],   // JO wind/gravity cells: the antennae deflected by moving air
       // Hot and cold cells are separate populations in v783 (tools/build_brain.py splits
       // them by sub_class): heat drives the 'heating' thermosensory cells; cool drives the
       // 'cold' thermosensory cells plus the hygrosensory cells FlyWire labels as
@@ -150,6 +151,7 @@ export class Brain {
       bitter:  [['grn_bitter_l'], ['grn_bitter_r']],
       odour:   [['orn_l'], ['orn_r']],
       touch:   [['mechano_l'], ['mechano_r']],
+      wind:    [['mechano_wind_l'], ['mechano_wind_r']],
       damp:    [['hygro_l'], ['hygro_r']],
       light:   [['visual_l'], ['visual_r']],
       looming: [['lc4_l', 'lplc2_l'], ['lc4_r', 'lplc2_r']],
@@ -233,25 +235,49 @@ export class Brain {
   // one differ. Measure them here at load rather than hard-coding numbers from elsewhere.
   // Deliberately a one-shot calibration, NOT a running adaptation: a slow adaptive baseline
   // would make a sustained stimulus fade, i.e. habituation, which is ruled out by design.
-  calibrate(ms = 2500) {
+  // The resting rate of each pool is the MEAN spike rate over the last `measure` ms of the
+  // calibration (spike counts, not the 25 ms rate estimate at the final tick): a two-cell
+  // pool's 25 ms estimate is a coin toss, and a rest taken from it steered the fly in circles.
+  calibrate(ms = 2500, measure = 1500) {
     const saved = { ...this.stim };
     for (const k of Object.keys(this.stim)) this.setStim(k, 0);
-    this.step(ms);
-    this.rest = {};
-    for (const k of this.roleNames) this.rest[k] = Math.max(0.5, this.rate[k]);
+    measure = Math.min(measure, ms);
+    this.step(ms - measure);
+    this._calibrationCounts(measure);
     for (const [k, v] of Object.entries(saved)) this.setStim(k, v);
     return this.rest;
   }
+  _calibrationCounts(measure: number) {
+    const acc = new Float64Array(this.roleNames.length);
+    for (let t = 0; t < measure; t++) { this.step(1); for (let r = 0; r < acc.length; r++) acc[r] += this._cnt[r]; }
+    this.rest = {};
+    for (let r = 0; r < this.roleNames.length; r++) {
+      const k = this.roleNames[r], n0 = this.groups[k].length;
+      this.rest[k] = Math.max(0.5, measure > 0 && n0 > 0 ? acc[r] * 1000 / (measure * n0) : this.rate[k]);
+    }
+  }
 
   // Same one-shot calibration, yielded in small batches so mobile loading UI stays responsive.
-  async calibrateResponsive(ms = 2500) {
+  async calibrateResponsive(ms = 2500, measure = 1500) {
     const saved = { ...this.stim };
     for (const k of Object.keys(this.stim)) this.setStim(k, 0);
-    for (let elapsed = 0; elapsed < ms; elapsed += 25) {
-      this.step(Math.min(25, ms - elapsed));
+    measure = Math.min(measure, ms);
+    const warm = ms - measure;
+    for (let elapsed = 0; elapsed < warm; elapsed += 25) {
+      this.step(Math.min(25, warm - elapsed));
       await new Promise(resolve => setTimeout(resolve, 0));
     }
-    this.calibrate(0); // Capture the final resting rates without advancing or adapting the brain.
+    const acc = new Float64Array(this.roleNames.length);
+    for (let elapsed = 0; elapsed < measure; elapsed += 25) {
+      const n = Math.min(25, measure - elapsed);
+      for (let t = 0; t < n; t++) { this.step(1); for (let r = 0; r < acc.length; r++) acc[r] += this._cnt[r]; }
+      await new Promise(resolve => setTimeout(resolve, 0));
+    }
+    this.rest = {};
+    for (let r = 0; r < this.roleNames.length; r++) {
+      const k = this.roleNames[r], n0 = this.groups[k].length;
+      this.rest[k] = Math.max(0.5, measure > 0 && n0 > 0 ? acc[r] * 1000 / (measure * n0) : this.rate[k]);
+    }
     for (const [k, v] of Object.entries(saved)) this.setStim(k, v);
     return this.rest;
   }

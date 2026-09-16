@@ -34,7 +34,7 @@ const end = app.indexOf('// ----------------------------------------------------
 assert(start >= 0 && end > start, 'controller section must exist');
 vm.runInContext(app.slice(start, end) + `
 globalThis.controller = { resetSim, buildDriveMap, buildShuffleMap, buildFlightMap, buildWorldMap, stepSimulation, stepMs, PHYS_SUBSTEPS, stepFlight,
-  flight, FLIGHT, WALK, WORLD, shuffle, stimPulse, world, walkable, erodeOk, get wings() { return wingJoints; }, get hold() { return holdCtrl; } };`, context);
+  flight, FLIGHT, WALK, WORLD, shuffle, stimPulse, stimSwitch, applyStim, world, walkable, erodeOk, get wings() { return wingJoints; }, get hold() { return holdCtrl; } };`, context);
 const c = context.controller;
 c.resetSim(); c.buildDriveMap(model, brain); c.buildShuffleMap(); c.buildFlightMap(); c.buildWorldMap();
 c.world.enabled = false;   // the senses here are scripted; tools/world_test.mjs covers the world
@@ -55,9 +55,9 @@ assert.equal(f.state, 'ground');
 assert(f.escape < 5, 'escape DNs silent at rest');
 
 // 2. Looming drives the escape circuit; the escape circuit launches the fly.
-brain.setStim('looming', 1);
+c.stimSwitch.looming = 1; c.applyStim('looming');   // through the switch, as the page does (a direct setStim is overwritten by the wall pulse while walking)
 let takeoffAt = -1;
-for (let t = 0; t < 200 && takeoffAt < 0; t++) { advance(0.01); if (f.state !== 'ground') takeoffAt = t * 0.01; }
+for (let t = 0; t < 200 && takeoffAt < 0; t++) { advance(0.01); if (f.state === 'takeoff' || f.state === 'flight') takeoffAt = t * 0.01; }   // a walking bout may start first; the takeoff is what counts
 assert(takeoffAt >= 0, 'looming causes takeoff within 2 s');
 assert.equal(f.count, 1);
 assert(f.escape > F.takeoffRate, 'trigger is the measured escape rate');
@@ -73,15 +73,27 @@ assert(data.qpos[2] > 0.3, `airborne (z=${data.qpos[2].toFixed(3)})`);
 let yawMin = Infinity, yawMax = -Infinity;
 for (let i = 0; i < 100; i++) { c.stepMs(); yawMin = Math.min(yawMin, data.qpos[yawAdr]); yawMax = Math.max(yawMax, data.qpos[yawAdr]); }
 assert(yawMax - yawMin > 0.8, `wings beat (sweep ${(yawMax - yawMin).toFixed(2)} rad over 0.1 s)`);
-// heading follows the steering asymmetry sign
+// heading follows the steering asymmetry sign (with the real brain the looming threat's own
+// turn-away term also steers, so the sign check is made with a scripted brain below; here the
+// real values are recorded)
 let asymSum = 0, n = 0; const yaw0 = f.yaw;
 for (let i = 0; i < 100; i++) { advance(0.01); asymSum += f.asym; n++; }
 const dyaw = Math.atan2(Math.sin(f.yaw - yaw0), Math.cos(f.yaw - yaw0));
 console.log('in flight', { takeoffAt, z: data.qpos[2].toFixed(3), asym: (asymSum / n).toFixed(2), dyaw: dyaw.toFixed(2), escape: f.escape.toFixed(0) });
-if (Math.abs(asymSum / n) > 0.1) assert(Math.sign(dyaw) === Math.sign(asymSum / n), 'turns toward the stronger steering DN');
+{
+  f.x = f.bounds.cx; f.y = f.bounds.cy; f.yawRate = 0;   // mid-air at the centre: no wall or obstacle term in the way
+  const yawA = f.yaw, escapeA = f.escape;
+  const steerer = (l, r) => ({ rate: { dn_escwing_l: 150, dn_escwing_r: 150, dn_steer_l: l, dn_steer_r: r }, rest: { dn_steer_l: 70, dn_steer_r: 53 }, spikesOf: () => 0 });
+  for (let i = 0; i < 300; i++) c.stepFlight(steerer(105, 53), data, 0.001);   // left DN 1.5x its rest, escape sides balanced
+  const turned = Math.atan2(Math.sin(f.yaw - yawA), Math.cos(f.yaw - yawA));
+  assert(turned > 0.05, `turns toward the stronger steering DN (${turned.toFixed(2)} rad in 0.3 s)`);
+  for (let i = 0; i < 600; i++) c.stepFlight(steerer(70, 80), data, 0.001);   // the asymmetry and the yaw rate are both filtered: ~0.3 s to reverse
+  assert(f.yawRate < 0 && Math.atan2(Math.sin(f.yaw - yawA), Math.cos(f.yaw - yawA)) < turned, 'and back the other way when the right DN is stronger');
+  f.escape = escapeA;
+}
 
 // 3. Threat gone: the escape DNs fall silent and the fly lands where it is, on walkable floor.
-brain.setStim('looming', 0);
+c.stimSwitch.looming = 0; c.applyStim('looming');
 let landedAt = -1;
 for (let t = 0; t < 2500 && landedAt < 0; t++) { advance(0.01); if (f.state === 'ground') landedAt = t * 0.01; }
 assert(landedAt >= 0, 'lands within 25 s of the threat passing');
@@ -126,9 +138,9 @@ const legs = ['T1_left', 'T2_left', 'T3_left', 'T1_right', 'T2_right', 'T3_right
 const TRIPOD_A = new Set(['T1_left', 'T2_right', 'T3_left']);
 const claws = legs.map(l => mujoco.mj_name2id(model, 1, `claw_${l}`));
 const slips = legs.map(() => []), stanceStart = legs.map(() => null);
-let swMin = Infinity, swMax = -Infinity;
+let swMin = Infinity, swMax = -Infinity, yawRateSum = 0;
 for (let i = 0; i < 1000; i++) {
-  c.stepMs(); swMin = Math.min(swMin, data.ctrl[swingAi]); swMax = Math.max(swMax, data.ctrl[swingAi]);
+  c.stepMs(); swMin = Math.min(swMin, data.ctrl[swingAi]); swMax = Math.max(swMax, data.ctrl[swingAi]); yawRateSum += f.yawRate / 1000;
   const hx = Math.cos(f.yaw), hy = Math.sin(f.yaw);
   legs.forEach((l, k) => {
     const ph = (f.walk.phase + (TRIPOD_A.has(l) ? 0 : Math.PI)) % (2 * Math.PI), b = claws[k];
@@ -141,14 +153,14 @@ for (let i = 0; i < 1000; i++) {
 const walked = (data.qpos[0] - x0) * Math.cos(yawA) + (data.qpos[1] - y0) * Math.sin(yawA);
 const slipPerLeg = slips.map(s => s.slice(1).reduce((a, b) => a + b, 0) / Math.max(1, s.length - 1));
 const slipMean = slipPerLeg.reduce((a, b) => a + b, 0) / 6;
-console.log('walk', { state: f.state, walked: walked.toFixed(3), bouts: f.walk.count, z: data.qpos[2].toFixed(3), stride: (swMax - swMin).toFixed(3), slip: slipPerLeg.map(v => v.toFixed(4)) });
+console.log('walk', { state: f.state, walked: walked.toFixed(3), bouts: f.walk.count, z: data.qpos[2].toFixed(3), stride: (swMax - swMin).toFixed(3), slip: slipPerLeg.map(v => v.toFixed(4)), meanYawRate: yawRateSum.toFixed(2), asym: f.asym.toFixed(2), steer: `${brain.rate.dn_steer_l.toFixed(0)}/${brain.rate.dn_steer_r.toFixed(0)} rest ${brain.rest.dn_steer_l.toFixed(0)}/${brain.rest.dn_steer_r.toFixed(0)}` });
 assert(walked > 0.1, 'walks forward along its heading');
 const ampT2 = c.WALK.speed / (4 * c.WALK.cmPerRad.T2 * c.WALK.stepHz);
 assert(Math.abs(swMax - swMin - 2 * ampT2) < 0.02, `the middle leg strides at its derived amplitude (${(swMax - swMin).toFixed(2)} vs ${(2 * ampT2).toFixed(2)} rad)`);
 assert(slips.every(s => s.length >= 2), 'several stances measured per leg');
 assert(Math.abs(slipMean) < 0.005, `planted feet keep pace with the body (mean along-heading slip ${slipMean.toFixed(4)} cm per stance)`);
 assert(slipPerLeg.every(v => Math.abs(v) < 0.03), 'no leg drags its footstep');
-assert(Math.abs(f.yawRate) < 0.8, 'steering at the calibrated rest wanders rather than circles');
+assert(Math.abs(yawRateSum) < 0.8, `steering at the calibrated rest wanders rather than circles (mean yaw rate ${yawRateSum.toFixed(2)} rad/s over the bout)`);
 // the bout ends with a short settle, not the landing crouch: the root is handed back standing,
 // within WALK.stopSec + settling, without the body dipping below its standing height
 let stopT = 0, stopMinZ = Infinity;
@@ -215,7 +227,7 @@ let maxR = 0, loomSeen = 0;
 for (let i = 0; i < 2000; i++) { c.stepFlight(fake, data, 0.001); maxR = Math.max(maxR, Math.hypot(f.x - B.cx, f.y - B.cy)); loomSeen = Math.max(loomSeen, brain.stim.looming); }
 assert(maxR <= B.r + 1e-9, 'never leaves the bounds');
 assert(loomSeen > 0.5 * F.wallLoom && loomSeen <= F.wallLoom + 1e-9, 'the wall looms at the brain, gently');
-f.state = 'ground'; f.wallLoom = 0; c.stimPulse.looming = 0; brain.setStim('looming', 0);
+f.state = 'ground'; f.wallLoom = 0; c.stimPulse.looming = 0; c.stimSwitch.looming = 0; c.applyStim('looming');
 f.enabled = false; f.escape = 0;
 for (let i = 0; i < 1000; i++) c.stepFlight(fake, data, 0.001);
 assert.equal(f.state, 'ground', 'disabled flight never launches');

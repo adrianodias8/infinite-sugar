@@ -38,8 +38,8 @@ recenter, speed and sound controls sit below the fly. Speed asks for 1×, 2× or
 time per real second; Inspect shows what the machine achieves. World switches the terrarium's senses off; Sugar
 overrides with infinite sugar wherever the fly is; sound (off by default) is a wingbeat tone
 and a tick per step, synthesised from the same state that draws them. The environment strip
-forces the other senses: touch, heat, cool, odour, bitter and damp are switches, Light also
-brightens the terrarium, and Loom sends a dark sphere at the fly. A status line says what the
+forces the other senses: touch, heat, cool, odour, bitter, damp and wind are switches, Light
+also brightens the terrarium, and Loom sends a dark sphere at the fly. A status line says what the
 fly is doing in a sentence (walking toward the sugar, feeding at the sack, flying from a
 threat). The camera watches from where you put it and slides round the fly when the terrarium
 hides it. About contains the premise, technical summary, credits and further reading; Inspect

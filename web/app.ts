@@ -899,6 +899,7 @@ const WORLD = {
   sugarEmpty: 180,     // seconds of feeding at full contact that empty the sack
   sugarRefill: 600,    // seconds for an empty sack to fill again (it is refilled, slowly)
   contrastGain: 0.05,  // visual level per unit brightness change per second (a passing shadow is a transient)
+  windLevel: 0.3,      // the draught on the antennae (JO wind cells), on the antenna it comes from; airspeed in flight adds up to the same again
   tasteReach: 0.03,    // the labellum tastes within this of the sack's surface; the feet within footReach of its base
   footReach: 0.04,
   loomRange: 1.2, loomTau: 1.0,   // objects closer than loomRange on a collision course within loomTau seconds loom (a hand-rolled ball at 2 cm/s from 0.6 cm reads 0.5 and launches the fly; 0.6 s left it just under the threshold)
@@ -922,7 +923,7 @@ const world = {
   loomers: [] as Loomer[],                               // written by main (ball) each frame
   touchHits: [] as number[],                             // bearings of contacts, queued by main
   ground: null as GroundMap | null,                      // walkable floor cells, sampled from the terrarium mesh
-  levels: { sweet:0, sweetLeg:0, bitter:0, odour:0, light:0, heat:0, cool:0, damp:0, looming:0, object:0, touch:0 },
+  levels: { sweet:0, sweetLeg:0, bitter:0, odour:0, light:0, heat:0, cool:0, damp:0, looming:0, object:0, touch:0, wind:0 },
   headBody: -1, labrumBodies: [] as number[], clawBodies: [] as number[],
 };
 function buildWorldMap() {
@@ -1109,6 +1110,14 @@ function stepWorld(d: MjData, dt: number) {
   const facing = lateral(1, bearingTo(d, S.x, S.y));
   L.odour = odourAt(hx, hy);
   setWorld('odour', facing[0] * antL, facing[1] * antR);
+  // --- the air: the draught that carries the odour also deflects the antennae (the JO wind/gravity
+  //     cells), more on the antenna it comes from; in flight the fly's own airspeed adds a headwind
+  //     on both. Supplied levels; which cells, from FlyWire's sub_class.
+  const windFrom = Math.atan2(-WORLD.draught[1], -WORLD.draught[0]);
+  const wd = lateral(WORLD.windLevel, wrapAngle(windFrom - yaw));
+  const air = flight.state === 'flight' || flight.state === 'landing' || flight.state === 'takeoff' ? WORLD.windLevel * Math.hypot(flight.vx, flight.vy) / FLIGHT.speed : 0;
+  L.wind = Math.min(1, Math.max(wd[0], wd[1]) + air);
+  setWorld('wind', Math.min(1, wd[0] + air), Math.min(1, wd[1] + air));
   // --- moving objects: looming by time to collision, on the eye they approach; and a small
   //     object crossing the view (angular velocity, not approach) for the LC11 detectors
   let lo = 0, ro = 0, ol = 0, or_ = 0; L.looming = 0; L.object = 0;
@@ -1302,7 +1311,11 @@ const FLIGHT = {
 const WALK = {
   speed: 0.22,        // cm/s forward (backward at 0.6x)
   yawRate: 1.5,       // rad/s at full steering asymmetry
-  boutPerSpike: 0.6,  // seconds of walking each DNp09 spike requests
+  boutPerSpike: 0.6,  // seconds of walking each DNp09 spike requests at a 0.6 Hz resting rate; scaled by
+                      // 0.6 / rest so the resting drive asks for the same share of walking whatever the
+                      // kernel's rest (rest-relative, like MDN's gate): 0.6 Hz with the predicted signs,
+                      // 3.8 Hz with the literature-corrected ones, which would otherwise never stop walking
+  restRate: 0.6,      // Hz, the DNp09 resting rate boutPerSpike was set against
   backGain: 2.5,      // MDN is tonic here (~17 Hz at rest); backward bouts while its 100 ms mean exceeds this multiple of rest
   boutMax: 2.0,
   stepHz: 2.2, lift: 0.006,   // tripod stepping cycle and the body lift while the feet swing
@@ -1413,7 +1426,7 @@ function stepFlight(b: BrainLike, d: MjData, dt: number) {
     const fwd = b.spikesOf('dn_walk');
     const backRest = b.rest && b.rest.dn_back || 0;
     const back = backRest > 0 ? (W.back > WALK.backGain * backRest ? dt * 1.5 : 0) : b.spikesOf('dn_back') * WALK.boutPerSpike * 0.67;
-    if (fwd > 0) { W.bout = Math.min(WALK.boutMax, W.bout + fwd * WALK.boutPerSpike); W.dir = 1; }
+    if (fwd > 0) { const restWalk = Math.max(WALK.restRate, (b.rest && b.rest.dn_walk) || WALK.restRate); W.bout = Math.min(WALK.boutMax, W.bout + fwd * WALK.boutPerSpike * WALK.restRate / restWalk); W.dir = 1; }
     else if (back > 0) { W.bout = Math.min(WALK.boutMax, W.bout + back); W.dir = -1; }
   }
   if (flight.state === 'ground') {
@@ -2122,7 +2135,7 @@ function stepMs() { for (let i = 0; i < PHYS_SUBSTEPS; i++) stepSimulation(); }
 
     const SENSE_ROWS: [string, () => number][] = [
       ['sweet', () => brain.rate.grn_sweet], ['bitter', () => brain.rate.grn_bitter], ['odour', () => brain.rate.orn],
-      ['touch', () => brain.rate.mechano], ['heat', () => brain.rate.thermo_hot], ['cool', () => brain.rate.thermo_cold],
+      ['touch', () => brain.rate.mechano], ['wind', () => brain.rate.mechano_wind || 0], ['heat', () => brain.rate.thermo_hot], ['cool', () => brain.rate.thermo_cold],
       ['damp', () => brain.rate.hygro], ['light', () => brain.rate.visual], ['looming', () => (brain.rate.lc4 + brain.rate.lplc2) / 2],
       ['object', () => brain.rate.lc11]];
 
@@ -2399,7 +2412,7 @@ function stepMs() { for (let i = 0; i < PHYS_SUBSTEPS; i++) stepSimulation(); }
         $('s_sugar_d').textContent = world.sugar.placed ? `${world.sugarDist.toFixed(2)} cm · ${Math.round(world.sugar.amount * 100)} % left` : '–';
         $('s_wtaste').textContent = `${wl.sweet.toFixed(2)} / ${wl.sweetLeg.toFixed(2)} / ${wl.bitter.toFixed(0)} / ${wl.odour.toFixed(2)}`;
         $('s_wlight').textContent = `${wl.light.toFixed(2)} / ${wl.heat.toFixed(2)} / ${wl.cool.toFixed(2)}`;
-        $('s_wloom').textContent = `${wl.looming.toFixed(2)} / ${wl.object.toFixed(2)} / ${wl.touch.toFixed(2)}`;
+        $('s_wloom').textContent = `${wl.looming.toFixed(2)} / ${wl.object.toFixed(2)} / ${wl.touch.toFixed(2)} / ${wl.wind.toFixed(2)}`;
         $('s_steerside').textContent = flight.asym.toFixed(2);
       }
       $('s_cnt').textContent  = brain.sugarFeedSpikes.toLocaleString();

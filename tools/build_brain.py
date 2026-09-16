@@ -15,8 +15,18 @@ RAW = sys.argv[1] if len(sys.argv) > 1 else "data/raw"
 OUT = sys.argv[2] if len(sys.argv) > 2 else "data"
 os.makedirs(OUT, exist_ok=True)
 
-# nt_type -> sign. Predicted, not measured (see docs/04-roadmap.md honesty budget).
+# nt_type -> sign. The Codex prediction per synapse (see docs/04-roadmap.md honesty budget)...
 NT_SIGN = {"ACH": 1.0, "GABA": -1.0, "GLUT": -1.0, "DA": 0.5, "SER": 0.5, "OCT": 0.5}
+# ...corrected, where the literature knows a cell type's transmitter, by the ground truth of
+# flyconnectome/drosophila_neurotransmitters (gt_data.csv, CC-BY 4.0; Eckstein et al.): a
+# neuron whose FlyWire cell type has one verified fast transmitter at confidence >= 3 gets that
+# transmitter's sign on every outgoing synapse. Histamine (the photoreceptors) and glycine are
+# inhibitory in the fly; the monoamines stay modulatory at 0.5 as in the prediction map; nitric
+# oxide and co-transmitting types are left to the prediction. Set GT_MIN_CONF = 99 to disable.
+GT_SIGN = {"acetylcholine": 1.0, "gaba": -1.0, "glutamate": -1.0, "histamine": -1.0, "glycine": -1.0,
+           "dopamine": 0.5, "serotonin": 0.5, "octopamine": 0.5, "tyramine": 0.5}
+GT_FAST = ("acetylcholine", "gaba", "glutamate", "histamine", "glycine")
+GT_MIN_CONF = 3
 
 def rows(name):
     with gzip.open(os.path.join(RAW, name), "rt", newline="") as f:
@@ -75,6 +85,8 @@ for i in range(N):
 groups = defaultdict(list)
 for i, r in enumerate(role):
     if r: groups[r].append(i)
+for i in range(N):
+    if cls[i] == "mechanosensory" and sub[i] == "wind_gravity": groups["mechano_wind"].append(i)
 # side-split the paired motor pools so the two sides can drive their joints independently
 for r in ("mn_neck", "mn_antenna", "dn_steer", "dn_escwing"):
     for sd in ("left", "right"):
@@ -84,7 +96,7 @@ for r in ("mn_neck", "mn_antenna", "dn_steer", "dn_escwing"):
 # smell/see/loom/touch the fly on the left or the right, and the steering and escape DNs are
 # split the same way, so a lateralised input has a chance of a lateralised output. Neurons
 # without a side (30 ORNs, 76 'center' visual cells) stay in the union only.
-for r in ("orn", "mechano", "visual", "lc4", "lplc2", "lc11", "grn_sweet", "grn_bitter", "hygro"):
+for r in ("orn", "mechano", "mechano_wind", "visual", "lc4", "lplc2", "lc11", "grn_sweet", "grn_bitter", "hygro"):
     for sd in ("left", "right"):
         g = [i for i in groups[r] if side[i] == sd]
         if g: groups[f"{r}_{sd[0]}"] = g
@@ -127,6 +139,33 @@ print(f"aggregated edges (pre,post):   {E:,}")
 print(f"total synapses:                {agg_syn.sum():,}")
 
 sign = np.array([NT_SIGN[k] for k in NT_SIGN], np.float32)[agg_nt]
+# ---- literature-verified transmitters override the prediction per presynaptic neuron -------
+gt_path = os.path.join(RAW, "gt_data.csv")
+gt_sign = {}
+if os.path.exists(gt_path) and GT_MIN_CONF <= 5:
+    with open(gt_path, newline="") as f:
+        for row in csv.DictReader(f):
+            try: conf = int(row["neurotransmitter_verified_confidence"] or 0)
+            except ValueError: conf = 0
+            if conf < GT_MIN_CONF: continue
+            fast = [t for t in GT_FAST if row.get(t) == "1"]
+            mod = [t for t in GT_SIGN if t not in GT_FAST and row.get(t) == "1"]
+            if len(fast) == 1: gt_sign[row["cell_type"]] = GT_SIGN[fast[0]]
+            elif not fast and len(mod) == 1: gt_sign[row["cell_type"]] = GT_SIGN[mod[0]]
+            # co-transmitting or unknown: leave the prediction
+    override = np.full(N, np.nan, np.float32)
+    for i in range(N):
+        v = gt_sign.get(ptype[i])
+        if v is not None: override[i] = v
+    has = ~np.isnan(override[agg_pre])
+    before = sign.copy()
+    sign = np.where(has, override[agg_pre], sign).astype(np.float32)
+    changed = has & (before != sign)
+    flipped = has & (np.sign(before) != np.sign(sign))
+    print(f"neurotransmitter ground truth: {len(gt_sign):,} cell types, {int(np.sum(~np.isnan(override))):,} neurons, "
+          f"{int(has.sum()):,} of {E:,} edges covered, {int(changed.sum()):,} signs changed, {int(flipped.sum()):,} flipped in sign")
+else:
+    print("neurotransmitter ground truth: not applied (no data/raw/gt_data.csv)")
 w = (agg_syn * sign).astype(np.float32)
 
 # ---- CSR ---------------------------------------------------------------------

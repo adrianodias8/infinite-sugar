@@ -1,0 +1,126 @@
+# Next moves — what the fly-connectome community has built, and what it means for this fly
+
+Written 2026-09-16 against [cobanov/awesome-fly](https://github.com/cobanov/awesome-fly), the
+community list this project appears on. Two things from it are done below; the rest is a plan,
+in order, with what each would cost and what it would make true.
+
+## Done from the list
+
+### 1. Literature-verified neurotransmitters (flyconnectome/drosophila_neurotransmitters)
+
+The honesty budget has always said the synapse signs were predicted, not measured. The
+community's ground-truth table (Eckstein et al.; 6,107 rows over 71 studies, CC-BY 4.0) names
+the transmitter of a cell type where the literature knows it. `tools/build_brain.py` now
+applies it: a neuron whose FlyWire cell type has one verified fast transmitter at confidence
+≥ 3 gets that transmitter's sign on every outgoing synapse; histamine (the photoreceptors)
+and glycine are inhibitory, the monoamines stay modulatory at 0.5, co-transmitting types and
+nitric oxide keep the prediction. `tools/fetch_flywire.sh` fetches the table.
+
+Measured on FAFB v783: 3,930 cell types matched, 77,351 neurons, 1,171,570 of 2,700,513 edges
+covered, 92,818 signs changed, 79,870 flipped. The largest single correction is the eye:
+8,456 R1-6 photoreceptors were predicted cholinergic or glutamatergic and are histaminergic,
+so light now *inhibits* the lamina, as it does in the fly. The whole-brain resting rate went
+from 6.4 to 7.5 Hz. The NumPy response matrix with the corrected signs
+(`python3 tools/response_matrix.py`):
+
+    stimulus     pop |    proboscis        neck     antenna       dn_gf  dn_escwing    dn_steer     dn_walk    dn_groom         pam
+    (none)       6.4 |       9.2Hz     10.8Hz      9.9Hz      0.8Hz      0.3Hz     53.3Hz      0.8Hz     26.4Hz      4.0Hz
+    sweet        6.7 |       +146%*       -19%        +12%        +50%*       +50%*        -1%         +0%         +0%         +3%
+    sweet lab    6.6 |       +319%*       -17%        +14%       +100%*       +50%*        +0%        -50%*        -3%         -0%
+    bitter       6.5 |        -43%*        +1%         +1%       +150%*       +50%*       +16%        +50%*        +0%         -0%
+    odour       11.0 |        -26%*        +8%         -3%       -100%*     +2100%*       +16%        -50%*        +1%         -2%
+    touch       10.1 |        +60%*      +121%*      +424%*       -50%*      -100%*        -9%        -50%*       +62%*        -1%
+    heat 2.5x    6.5 |        -11%        +20%         +2%       +100%*     +1050%*       +13%       +200%*        -5%         -3%
+    wind         7.1 |        -17%         +7%        -12%        +50%*      -100%*       +12%       +200%*       +65%*        +0%
+    light       20.8 |        +14%         +5%         -6%         +0%        +50%*       +13%       +100%*        +2%         +0%
+    looming      6.8 |         +5%         -5%        -29%*    +15750%*    +79100%*       -14%        +0%         -6%         -2%
+    object       6.5 |         -1%         +3%         -2%        -50%*       -50%*       +29%*        +0%         -4%         -0%
+
+Every reflex the piece rests on survives: sugar drives the proboscis (+146 % / +319 % labellar),
+bitter clamps it (−43 %), looming alone wakes the escape wing DNs, touch turns the neck and
+sweeps the antennae. Browser kernel, same graph: looming → escape DNs 252 / 199 Hz, escape mean
+227 within 300 ms (takeoff at 100); sugar → proboscis 4 → 30 Hz.
+
+Two things the corrected wiring changed, and what was done about them:
+
+- **DNp09 rests at ~1 Hz, not 0.6.** Each spike requested 0.6 s of walking, set against the
+  old rest, and the fly would have walked without pause (measured: 99 % of a two-minute run).
+  The request is now rest-relative, like MDN's gate: 0.6 s × (0.6 / calibrated rest) per
+  spike, so the resting drive asks for the same share of walking whatever the kernel's rest.
+- **The resting-rate calibration was a 25 ms snapshot.** For a two-cell steering pool that is
+  a coin toss (it read L 67 / R 81 against a true 76 / 58 and steered the fly in circles).
+  `brain.calibrate` now takes the MEAN spike rate over the last 1.5 s of the 2.5 s calibration.
+  This was wrong before the sign correction too; the correction made it visible.
+
+Behavioural budget with the corrected signs (120 s on the perch disc): walking 84.8 % by day,
+88.5 % at night; standing 12.1 / 8.0 %; 27 bouts, no flights (nothing loomed), the sack not
+reached. Against 74 / 83 % before: the same fly, a little busier.
+
+### 2. Wind on the antennae (after flyverse)
+
+FlyWire labels 486 mechanosensory cells `wind_gravity` (Johnston's organ). The draught that
+carries the odour now deflects the antennae: a `wind` channel (`mechano_wind`, split by side)
+at 0.3 on the antenna the draught comes from, plus the fly's own airspeed in flight, and a
+Wind switch in the strip. Measured in the wiring: wind raises DNg11 (grooming) +65 % and the
+walking DN +200 % (one-sided: the wind cells 168 / 4 Hz).
+
+## The plan, in order
+
+### 3. A whole-CNS fly: BANC (largest fidelity gain)
+
+The gait, the wingbeat and every leg movement here are supplied because FAFB is brain-only.
+The **BANC** connectome (Harvard Dataverse, CC-BY 4.0, no login; ~188,000 neurons, 199 M
+synapses, v888) is the *female* brain **and** ventral nerve cord: the leg and wing motor
+neurons and their premotor circuits are in it. With it, DNp09 would drive real leg motor
+neuron pools and their rates would drive flybody's leg actuators the way the proboscis motor
+neurons already do, and "supplied gait" would become "measured leg motor output through a
+supplied joint mapping". webgpu-fly did the nearest thing with the *male* VNC (MANC) matched
+to FlyWire by cell-type name and 369 leg motor neurons averaged into six leg groups that
+modulate a CPG. BANC removes the sex mismatch and the name matching. Cost: a new build
+pipeline (BANC's tables → the same CSR graph), roles for the leg/wing motor pools, and the
+honesty work of stating which of the 1.4× more neurons the browser can afford (the JS kernel
+is ~1.1 s per simulated second for 139k). First step: a feasibility run of BANC in
+`tools/response_matrix.py` (does a DNp09 drive raise the T1–T3 motor pools?).
+
+### 4. Speed: a worker thread, not a GPU
+
+webgpu-fly's WebGPU kernel reaches 0.25 kHz on an M2 Pro (memory-bound); this JS kernel does
+~0.9 kHz on the build container, so the GPU is not the win. The win is parallelism: the brain
+(1.1 s / s) and the physics (1.4 s / s) run in series on one thread. A Web Worker for the
+brain, exchanging one frame's worth of stimulus levels and rates through a SharedArrayBuffer
+(cross-origin isolation headers on the server), would overlap them and approach the slower of
+the two. Sensory levels would lag the body by one frame (16 ms), inside a real fly's
+transduction delays. Cost: a day; the determinism test must still pass.
+
+### 5. The eye from the measured lattice
+
+The retinotopy is inferred by rank ([15-vision.md](15-vision.md)). Closed-Loop Fly samples the
+scene at the connectome's 1,771 column directions (MaleCNS). For FlyWire the optic-lobe paper
+(Matsliah et al. 2024) assigned columns to visual neurons; if its per-neuron column table is
+obtainable (Codex is blocked from this build machine), `tools/build_retina.py` should take it
+in place of the rank map. The FlyGym numbers to hold the field to: 721 ommatidia per eye,
+~270° combined field, ~5° acceptance.
+
+### 6. Optic-lobe dynamics (flyvis)
+
+The eyes deliver an image but a static dark sphere does not reach LC4 through the wiring:
+motion detection needs the temporal dynamics that connectome-constrained models (flyvis,
+Lappalainen et al. 2024, MIT) give each of 64 optic-lobe cell types — a time constant and a
+resting potential per type, trained once against the connectome and published. Applying
+published per-type constants to the optic-lobe cells is not learning in this simulation, but
+it does break "one LIF for every neuron". Worth an experiment behind a flag: do LC4/LPLC2
+then respond to a real looming sphere through the wiring, so the geometric looming channel can
+be retired?
+
+### 7. Interaction (Help the Fly Escape, NeuroTerrarium)
+
+The ball can be picked up; the sack could be too (drag it and the odour plume, the ground
+map's footprint and the fly's target move with it), and a second object to place (a rock)
+would let a visitor build the fly a maze the way the escape game does. Cost: small.
+
+### 8. Cross-checks against the community's kernels
+
+Shiu et al.'s reference code, Eon's fly-brain and FastFly all run the same v783 graph. A
+one-page comparison of resting rates and the sugar → proboscis response across kernels would
+tell how much of what this fly does is the wiring and how much is the integrator. Cost: a
+script and an afternoon, if their parameter files are readable.
