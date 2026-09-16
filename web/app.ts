@@ -900,9 +900,13 @@ const WORLD = {
   objectRange: 1.5, objectRate: 2.0,   // a small object crossing the view within objectRange at objectRate rad/s drives LC11 fully
   floorZ: -0.132,      // the physics floor; the terrarium's visual floor undulates just above it
   floorBand: 0.23,     // ground hits up to this far above floorZ count as walkable floor (the floor undulates to +0.10)
+  bodyRadius: 0.09,    // cm round the root that must be floor for the body to stand or land there (the thorax is 0.05 wide, the legs reach 0.18; the perch sits 0.1 from the fern's base, so the legs may overlap an edge, the body never does)
+  bodyClearance: 0.15, // cm the root must stay above the top of anything under it while airborne (the body's half-height is 0.14)
 };
 type Loomer = { x: number, y: number, z: number, vx: number, vy: number, vz: number, r: number, name: string };
-type GroundMap = { x0: number, y0: number, cell: number, n: number, ok: Uint8Array, plant: Uint8Array };   // plant: a cell occupied by foliage or flowers
+// plant: a cell occupied by foliage or flowers; clear: floor cells with no obstacle within WORLD.bodyRadius (the body fits);
+// top: the height of the highest solid thing over each cell (floorZ for floor cells), for flying over and around things.
+type GroundMap = { x0: number, y0: number, cell: number, n: number, ok: Uint8Array, plant: Uint8Array, clear?: Uint8Array, top?: Float32Array };
 const world = {
   enabled: true, t: 0, day: 1, shade: 0, sugarDist: 0,
   bright: 1, contrast: 0,                                // brightness at the fly and its filtered rate of change
@@ -931,6 +935,44 @@ function walkable(x: number, y: number) {
   if (i < 0 || j < 0 || i >= g.n || j >= g.n) return false;
   return g.ok[j * g.n + i] === 1;
 }
+// The body fits here: the cell and every cell within the body's radius are floor. Without an
+// eroded map (the tests' synthetic maps) this is plain walkability.
+function bodyClear(x: number, y: number) {
+  const g = world.ground;
+  if (!g) return Math.hypot(x, y) < 0.6;
+  const i = Math.floor((x - g.x0) / g.cell), j = Math.floor((y - g.y0) / g.cell);
+  if (i < 0 || j < 0 || i >= g.n || j >= g.n) return false;
+  return (g.clear || g.ok)[j * g.n + i] === 1;
+}
+// Erode the floor by the body's radius: a cell stays clear only if every cell within r is floor.
+function erodeOk(ok: Uint8Array, n: number, r: number) {
+  const clear = new Uint8Array(n * n), R = Math.ceil(r);
+  for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
+    if (ok[j * n + i] !== 1) continue;
+    let fits = 1;
+    for (let dj = -R; dj <= R && fits; dj++) for (let di = -R; di <= R; di++) {
+      if (di * di + dj * dj > r * r) continue;
+      const ii = i + di, jj = j + dj;
+      if (ii < 0 || jj < 0 || ii >= n || jj >= n || ok[jj * n + ii] !== 1) { fits = 0; break; }
+    }
+    clear[j * n + i] = fits;
+  }
+  return clear;
+}
+// The highest solid thing within the body's radius of a point (floorZ where there is only floor).
+function topOver(x: number, y: number) {
+  const g = world.ground;
+  if (!g || !g.top) return WORLD.floorZ;
+  const R = Math.ceil(WORLD.bodyRadius / g.cell), ci = Math.floor((x - g.x0) / g.cell), cj = Math.floor((y - g.y0) / g.cell);
+  let top = WORLD.floorZ;
+  for (let j = cj - R; j <= cj + R; j++) for (let i = ci - R; i <= ci + R; i++) {
+    if (i < 0 || j < 0 || i >= g.n || j >= g.n) continue;
+    const cx = g.x0 + (i + 0.5) * g.cell, cy = g.y0 + (j + 0.5) * g.cell;
+    if (Math.hypot(cx - x, cy - y) > WORLD.bodyRadius + 0.5 * g.cell) continue;
+    if (g.top[j * g.n + i] > top) top = g.top[j * g.n + i];
+  }
+  return top;
+}
 function plantAt(x: number, y: number) {
   const g = world.ground;
   if (!g) return false;
@@ -941,10 +983,11 @@ function plantAt(x: number, y: number) {
 function nearestWalkable(x: number, y: number): [number, number] {
   const g = world.ground;
   if (!g) { const r = Math.hypot(x, y) || 1; return r > 0.5 ? [x / r * 0.5, y / r * 0.5] : [x, y]; }   // the fallback disc, with a margin from its edge
-  if (walkable(x, y)) return [x, y];
+  if (bodyClear(x, y)) return [x, y];
+  const fit = g.clear || g.ok;   // a spot the whole body fits on, not just the point under the root
   let best: [number, number] = [0, 0], bd = Infinity;
   for (let j = 0; j < g.n; j++) for (let i = 0; i < g.n; i++) {
-    if (g.ok[j * g.n + i] !== 1) continue;
+    if (fit[j * g.n + i] !== 1) continue;
     const cx = g.x0 + (i + 0.5) * g.cell, cy = g.y0 + (j + 0.5) * g.cell;
     const dd = (cx - x) * (cx - x) + (cy - y) * (cy - y);
     if (dd < bd) { bd = dd; best = [cx, cy]; }
@@ -1262,6 +1305,7 @@ const flight = {
   bounds: { cx: -0.5, cy: -0.15, r: 1.25, zmin: 0.2, zmax: 0.95 },
   walk: { bout: 0, dir: 1, phase: 0, count: 0, blocked: 0, back: 0, turning: false, turnSign: 1, settle: 0 },   // back: 100 ms mean of dn_back; settle: stride blend-out after a bout
   bob: 0, bobV: 0, seed: 7,   // altitude random walk (seeded, so a run repeats)
+  obstacle: false, obstacleSign: 1, obstacleT: 0,   // turning away from something too tall to fly over: which way, for how long
 };
 type WingJoint = { qadr: number, dadr: number, side: 'l' | 'r', axis: 'yaw' | 'roll' | 'pitch' };
 // Stroke centre in flight, and the folded pose the wings are returned to before the root is
@@ -1369,15 +1413,15 @@ function stepFlight(b: BrainLike, d: MjData, dt: number) {
     W.bout -= dt;
     speed = WALK.speed * (W.dir > 0 ? 1 : -0.6); yawRate = flight.asym * WALK.yawRate;
     const nx = flight.x + speed * Math.cos(flight.yaw) * 0.05, ny = flight.y + speed * Math.sin(flight.yaw) * 0.05;
-    if (!walkable(nx, ny)) {
+    if (!bodyClear(nx, ny)) {
       // An obstacle or the edge of the floor: the bout is spent turning toward open floor
       // (supplied), so the brain's next bout can go somewhere. Ending the bout instead left
       // the fly facing the same obstacle for good.
       if (!W.turning) { W.blocked++; W.turning = true; }
       speed = 0;
       const look = 0.08, a = flight.yaw + (W.dir > 0 ? 0 : Math.PI);
-      const left = walkable(flight.x + look * Math.cos(a + 1.0), flight.y + look * Math.sin(a + 1.0));
-      const right = walkable(flight.x + look * Math.cos(a - 1.0), flight.y + look * Math.sin(a - 1.0));
+      const left = bodyClear(flight.x + look * Math.cos(a + 1.0), flight.y + look * Math.sin(a + 1.0));
+      const right = bodyClear(flight.x + look * Math.cos(a - 1.0), flight.y + look * Math.sin(a - 1.0));
       yawRate += (left && !right ? 1 : right && !left ? -1 : W.turnSign) * WALK.yawRate;
     } else W.turning = false;
     zTarget = flight.standZ + WALK.lift; W.settle = 0;
@@ -1474,12 +1518,46 @@ function stepFlight(b: BrainLike, d: MjData, dt: number) {
     if (Math.abs(err) > 0.35) yawRate += Math.sign(err) * prox * FLIGHT.yawRate;
   }
   flight.wallLR = lateral(FLIGHT.wallLoom * prox * prox, wrapAngle(Math.atan2(ry, rx) - flight.yaw)); applyLooming(d);
+  // Things in the air (supplied): the hill, the rocks, the plants, the sack. The root keeps
+  // WORLD.bodyClearance above the highest thing under it and under the point a third of a
+  // centimetre ahead, climbing when it can; what it cannot fly over inside the glass it turns
+  // away from, toward the lower side. The hard floor below is the guarantee: whatever the
+  // target says, the body is never carried into something.
+  let tooTall = false;
+  if (flight.state === 'flight' || flight.state === 'landing') {
+    const ahead = 0.35, ax = flight.x + Math.cos(flight.yaw) * ahead, ay = flight.y + Math.sin(flight.yaw) * ahead;
+    const needAhead = topOver(ax, ay) + WORLD.bodyClearance, need = Math.max(topOver(flight.x, flight.y) + WORLD.bodyClearance, needAhead);
+    if (need > zTarget) zTarget = Math.min(need, B.zmax);
+    tooTall = needAhead > B.zmax - 0.02;
+    if (tooTall) {
+      // cannot go over: slow down and turn toward the lower side, the turn taking priority over
+      // the steering DNs and the landing approach for as long as the way ahead is blocked. The
+      // direction is chosen when the block starts and kept, so two tall sides do not dither.
+      if (!flight.obstacle) {
+        const l = topOver(flight.x + Math.cos(flight.yaw + 1.0) * ahead, flight.y + Math.sin(flight.yaw + 1.0) * ahead);
+        const r = topOver(flight.x + Math.cos(flight.yaw - 1.0) * ahead, flight.y + Math.sin(flight.yaw - 1.0) * ahead);
+        flight.obstacleSign = l < r ? 1 : r < l ? -1 : flight.obstacleSign;
+      }
+      yawRate = flight.obstacleSign * FLIGHT.yawRate;
+      speed = Math.min(speed, 0.2 * FLIGHT.speed);
+      flight.obstacleT += dt;
+      // a landing approach blocked for a while aims for the nearest spot the body fits on instead
+      if (flight.state === 'landing' && flight.obstacleT > 2) {
+        const [tx, ty] = nearestWalkable(flight.x, flight.y);
+        flight.home = { x: tx, y: ty, z: flight.standZ, yaw: flight.yaw }; flight.obstacleT = 0;
+      }
+    } else flight.obstacleT = 0;
+    flight.obstacle = tooTall;
+  }
 
   const yawRate0 = flight.yawRate;
   flight.yawRate += (yawRate - flight.yawRate) * (dt / 0.12);
   const yawAccel = (flight.yawRate - yawRate0) / dt;
   flight.yaw = wrapAngle(flight.yaw + flight.yawRate * dt);
   flight.vx = speed * Math.cos(flight.yaw); flight.vy = speed * Math.sin(flight.yaw);
+  // the guarantee: the next step never puts the root over something too tall to clear under the roof
+  if ((flight.state === 'flight' || flight.state === 'landing') && speed > 0 &&
+      topOver(flight.x + flight.vx * dt, flight.y + flight.vy * dt) + WORLD.bodyClearance > B.zmax) { flight.vx = 0; flight.vy = 0; }
   flight.x += flight.vx * dt; flight.y += flight.vy * dt;
   const rx2 = flight.x - B.cx, ry2 = flight.y - B.cy, rc2 = Math.hypot(rx2, ry2);
   if (rc2 > B.r) { flight.x = B.cx + rx2 / rc2 * B.r; flight.y = B.cy + ry2 / rc2 * B.r; }
@@ -1487,6 +1565,7 @@ function stepFlight(b: BrainLike, d: MjData, dt: number) {
   flight.z += (clamp(zTarget, Math.min(B.zmin, flight.home.z), B.zmax) - flight.z) * (dt / 0.35);
   const exact = flight.state === 'takeoff' || flight.state === 'settle' || flight.state === 'touchdown' || flight.state === 'walk';
   if (exact) flight.z = zTarget;   // exact lift-off, touchdown and walking heights
+  if (flight.state === 'flight' || flight.state === 'landing') flight.z = Math.max(flight.z, Math.min(B.zmax, topOver(flight.x, flight.y) + WORLD.bodyClearance));
   flight.vz = (flight.z - z0) / dt;
   const airborne = flight.state === 'takeoff' || flight.state === 'flight' || flight.state === 'landing';
   // Bank into the turn, leading it slightly (a share of yaw acceleration), like a real banked turn.
@@ -1763,7 +1842,7 @@ function stepSimulation() {
         // raycasts at load.
         const n = 56, span = 2 * flight.bounds.r, cell = span / n;
         const x0 = gcenter.x - span / 2, y0 = gcenter.y - span / 2;
-        const ok = new Uint8Array(n * n), plant = new Uint8Array(n * n);
+        const ok = new Uint8Array(n * n), plant = new Uint8Array(n * n), top = new Float32Array(n * n).fill(WORLD.floorZ);
         // Plants by the glTF's material colours (every mesh is auto-named): the flowers are
         // f06193, the foliage and fern fronds 4bb150 and df9b45, and the small 8ec44b pieces
         // are fern tips; the large 8ec44b mound is the hill.
@@ -1782,9 +1861,11 @@ function stepSimulation() {
           if (Math.hypot(x - gcenter.x, y - gcenter.y) > flight.bounds.r - cell) continue;
           const hit = groundUnder(solidMeshes, x, y);
           if (hit && hit.point.z < WORLD.floorZ + WORLD.floorBand) ok[j * n + i] = 1;
-          else if (hit && isPlant(hit.object)) plant[j * n + i] = 1;
+          else if (hit) { top[j * n + i] = hit.point.z; if (isPlant(hit.object)) plant[j * n + i] = 1; }   // an obstacle, and how tall
         }
-        world.ground = { x0, y0, cell, n, ok, plant };
+        world.ground = { x0, y0, cell, n, ok, plant, top };
+        let walkableCells = 0; for (const v of ok) walkableCells += v;
+        const sackTop = sack ? new THREE.Box3().setFromObject(sack).max.z : WORLD.floorZ;
         // The sugar goes on open floor: the nearest cell to its nominal spot whose 5x5
         // surroundings are all floor (a first placement put it half inside a rock), and its
         // footprint then becomes an obstacle the feet stop at.
@@ -1802,9 +1883,14 @@ function stepSimulation() {
           sack.updateMatrixWorld(true);
           for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
             const cx = x0 + (i + 0.5) * cell, cy = y0 + (j + 0.5) * cell;
-            if (Math.hypot(cx - world.sugar.x, cy - world.sugar.y) < world.sugar.r + 0.02) ok[j * n + i] = 0;
+            if (Math.hypot(cx - world.sugar.x, cy - world.sugar.y) < world.sugar.r + 0.02) { ok[j * n + i] = 0; top[j * n + i] = Math.max(top[j * n + i], sackTop); }
           }
         }
+        // The body's own size: a cell is clear for the root only when every cell within
+        // WORLD.bodyRadius is floor, so the fly walks and lands beside things, not into them.
+        world.ground.clear = erodeOk(ok, n, WORLD.bodyRadius / cell);
+        let clearCells = 0; for (const v of world.ground.clear) clearCells += v;
+        console.info(`walkable floor: ${walkableCells} cells, ${clearCells} clear for the body`);
       }
       solidMeshes.push(...sackMeshes);   // solid for the ball, after the sack has found its spot
       viewOccluders.push(...solidMeshes);

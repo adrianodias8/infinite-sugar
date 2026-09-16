@@ -34,7 +34,7 @@ const end = app.indexOf('// ----------------------------------------------------
 assert(start >= 0 && end > start, 'controller section must exist');
 vm.runInContext(app.slice(start, end) + `
 globalThis.controller = { resetSim, buildDriveMap, buildShuffleMap, buildFlightMap, buildWorldMap, stepSimulation, stepFlight,
-  flight, FLIGHT, WALK, shuffle, stimPulse, world, walkable, get wings() { return wingJoints; }, get hold() { return holdCtrl; } };`, context);
+  flight, FLIGHT, WALK, WORLD, shuffle, stimPulse, world, walkable, erodeOk, get wings() { return wingJoints; }, get hold() { return holdCtrl; } };`, context);
 const c = context.controller;
 c.resetSim(); c.buildDriveMap(model, brain); c.buildShuffleMap(); c.buildFlightMap(); c.buildWorldMap();
 c.world.enabled = false;   // the senses here are scripted; tools/world_test.mjs covers the world
@@ -167,6 +167,31 @@ c.stepFlight(stepper(0, 1, 105, 53), data, 0.001);
 assert.equal(f.state, 'walk'); assert.equal(f.walk.dir, -1, 'an MDN spike walks backward');
 for (let i = 0; i < 400; i++) c.stepFlight(stepper(0, 0, 105, 53), data, 0.001);
 assert(f.yawRate > 0.3, 'a stronger left steering DN turns left');
+// things in the air: a ridge ahead is flown over with the body's clearance; one too tall for the
+// glass is turned away from; and the root is never carried into it
+{
+  const n = 40, cell = 0.05, x0 = -1, y0 = -1;
+  const ok = new Uint8Array(n * n).fill(1), plant = new Uint8Array(n * n), top = new Float32Array(n * n).fill(c.WORLD.floorZ);
+  for (let j = 0; j < n; j++) for (let i = 26; i < 30; i++) { ok[j * n + i] = 0; top[j * n + i] = 0.6; }   // a wall across x = 0.3..0.5, 0.6 tall
+  c.world.ground = { x0, y0, cell, n, ok, plant, top, clear: c.erodeOk(ok, n, c.WORLD.bodyRadius / cell) };
+  const quiet = () => ({ rate: { dn_escwing_l:0, dn_escwing_r:0, dn_steer_l:70, dn_steer_r:53 }, rest: { dn_steer_l:70, dn_steer_r:53 }, spikesOf: () => 0 });
+  f.state = 'flight'; f.x = -0.3; f.y = 0; f.z = F.cruiseZ; f.yaw = 0; f.yawRate = 0; f.air = 0; f.quiet = 0; f.escape = 0; f.bob = 0; f.bobV = 0;
+  f.bounds = { cx: 0, cy: 0, r: 1.4, zmin: 0.2, zmax: 1.2 };
+  let minGap = Infinity, zMax = -Infinity;
+  for (let i = 0; i < 2000 && f.state === 'flight'; i++) { c.stepFlight(quiet(), data, 0.001); if (f.x > 0.25 && f.x < 0.55) { minGap = Math.min(minGap, f.z - 0.6); zMax = Math.max(zMax, f.z); } }
+  console.log('ridge ahead', { x: f.x.toFixed(2), z: f.z.toFixed(2), zMax: zMax.toFixed(2), minGap: minGap.toFixed(3), yaw: f.yaw.toFixed(2), obstacle: f.obstacle });
+  assert(f.x > 0.55 || Math.abs(f.yaw) > 0.3, 'the fly crossed the ridge or turned');
+  if (f.x > 0.55) assert(minGap >= c.WORLD.bodyClearance - 1e-6, `over the ridge the root kept its clearance (gap ${minGap.toFixed(3)})`);
+  // too tall to fly over inside the glass: turn away, never enter
+  for (let j = 0; j < n; j++) for (let i = 26; i < 30; i++) top[j * n + i] = 1.15;
+  f.x = -0.3; f.y = 0; f.z = F.cruiseZ; f.yaw = 0; f.yawRate = 0;
+  let entered = false, maxX = -Infinity;
+  for (let i = 0; i < 3000 && f.state === 'flight'; i++) { c.stepFlight(quiet(), data, 0.001); maxX = Math.max(maxX, f.x); if (f.x > 0.3 - c.WORLD.bodyRadius && f.x < 0.5 + c.WORLD.bodyRadius) entered = true; }
+  console.log('wall too tall', { x: f.x.toFixed(2), maxX: maxX.toFixed(3), z: f.z.toFixed(2), yaw: f.yaw.toFixed(2), obstacle: f.obstacle, entered });
+  assert(!entered, 'the root never comes within its radius of something it cannot fly over');
+  assert(Math.abs(f.yaw) > 0.3 || f.x < 0.3, 'it turns away from it');
+  c.world.ground = null; f.obstacle = false;
+}
 // the edge of the floor stops a bout
 f.state = 'ground'; f.walk.bout = 0;
 f.walk.bout = 1; f.walk.dir = 1; f.state = 'walk'; f.x = 0.58; f.y = 0; f.yaw = 0; f.standZ = standZ;   // fallback disc edge (no ground map here)
@@ -196,4 +221,4 @@ f.enabled = false; f.escape = 0;
 for (let i = 0; i < 1000; i++) c.stepFlight(fake, data, 0.001);
 assert.equal(f.state, 'ground', 'disabled flight never launches');
 f.enabled = true;
-console.log('PASS: escape-circuit takeoff, wingbeat, steering sign, landing on walkable floor, shuffle resumes, walking bouts, backward and turning, floor edge, bounds, turn-away, wall looming, disable switch');
+console.log('PASS: escape-circuit takeoff, wingbeat, steering sign, landing on walkable floor, shuffle resumes, walking bouts, backward and turning, floor edge, over and around obstacles, bounds, turn-away, wall looming, disable switch');

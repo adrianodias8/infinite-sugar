@@ -172,9 +172,19 @@ descending neuron and rises under touch (22.9 → 33.8 Hz). When its 200 ms mean
 its calibrated rest while the fly stands, the front legs lift and rub forward over the head for
 0.9 s at 4 Hz (the motion is ours); a quiet DNg11 never grooms. Walking stays on the
 walkable floor: a 56 × 56 map sampled at load from the terrarium's own opaque meshes (floor
-hits between −0.10 and +0.10; the hill, rocks, plants, frame and the sack are obstacles). A
-bout that meets an obstacle is spent turning toward open floor (supplied), so the next bout can
-go somewhere. A flight lands where it is if that is floor, else on the nearest floor cell. The root is kinematic while walking or flying and handed back to physics at
+hits between −0.10 and +0.10; the hill, rocks, plants, frame and the sack are obstacles). The
+body has a size: the floor map is eroded by `WORLD.bodyRadius` (0.09 cm; the thorax is 0.05
+wide, the legs reach 0.18, and the perch sits 0.1 from the fern's base), and the root walks
+and lands only on cells whose whole radius is floor — the legs may overlap an edge, the body
+never enters a rock or a plant. Each obstacle cell also records how tall the thing is (the
+first hit from above; the sack its own height), so a flight keeps `WORLD.bodyClearance`
+(0.15, the body's half-height) above whatever is under it and under the point 0.35 cm ahead,
+climbing when it can, and what is too tall to clear under the roof (the tall plants reach
+3.8 cm) it slows for and turns away from, the direction chosen once per block so two tall
+sides do not dither; the next step is never taken onto such a cell, whatever the target says.
+A landing approach blocked for 2 s re-aims at the nearest spot the body fits on. A bout that
+meets an obstacle is spent turning toward open floor (supplied), so the next bout can go
+somewhere. A flight lands where it is if that is floor, else on the nearest floor cell. The root is kinematic while walking or flying and handed back to physics at
 the standing pose over loaded legs, as before.
 
 ## Measured
@@ -193,6 +203,14 @@ shades it to zero; a ball
 closing from the left looms on the left eye only (0.50 / 0.00) and a receding ball not at all; a
 bump from the ball is a touch on that flank and releases; switching the world off clears every
 level.
+
+Clearance, measured: the terrarium's 929 floor cells erode to 691 the body fits on; in a
+30 s headless run with two flights and eleven walking bouts the root was never on a cell it
+did not fit (standing or walking) and never closer than 0.15 above what was under it in the
+air (`tools/world_test.mjs` and `tools/flight_test.mjs` cover the erosion, the top map, a ridge
+flown over with the clearance kept, and a wall too tall for the glass never approached within
+the body's radius). Before this the root could be carried through a rock or a plant: the floor
+map was checked at the point under the root only, and the air had no obstacles at all.
 
 `tools/flight_test.mjs`: a DNp09 spike starts a bout and the fly walks forward along its
 heading; a scripted MDN spike walks it backward; a stronger left steering DN turns it left; at

@@ -35,7 +35,7 @@ const end = app.indexOf('// ----------------------------------------------------
 assert(start >= 0 && end > start, 'controller section must exist');
 vm.runInContext(app.slice(start, end) + `
 globalThis.controller = { resetSim, buildDriveMap, buildShuffleMap, buildFlightMap, buildWorldMap, stepSimulation,
-  stepWorld, world, WORLD, flight, stimWorld, poke, walkable, nearestWalkable, plantAt, stepGroom, groom };`, context);
+  stepWorld, world, WORLD, flight, stimWorld, poke, walkable, nearestWalkable, bodyClear, erodeOk, topOver, plantAt, stepGroom, groom };`, context);
 const c = context.controller;
 c.resetSim(); c.buildDriveMap(model, brain); c.buildShuffleMap(); c.buildFlightMap(); c.buildWorldMap();
 const w = c.world, W = c.WORLD;
@@ -197,6 +197,25 @@ w.enabled = true;
 assert(c.walkable(0, 0) && !c.walkable(2, 2));
 const [nx, ny] = c.nearestWalkable(2, 2);
 assert(c.walkable(nx, ny), 'nearest walkable point is walkable');
+// 6b. The body's own size: the floor eroded by the body radius keeps the root out of things, the
+// nearest landing spot is one the whole body fits on, and the top map says how tall things are.
+{
+  const n = 20, cell = 0.05, x0 = -0.5, y0 = -0.5;
+  const ok = new Uint8Array(n * n).fill(1), plant = new Uint8Array(n * n), top = new Float32Array(n * n).fill(W.floorZ);
+  for (let j = 8; j < 12; j++) for (let i = 8; i < 12; i++) { ok[j * n + i] = 0; top[j * n + i] = 0.4; }   // a rock 0.2 cm square, 0.4 tall, round the origin
+  const clear = c.erodeOk(ok, n, W.bodyRadius / cell);
+  w.ground = { x0, y0, cell, n, ok, plant, top, clear };
+  let okCells = 0, clearCells = 0; for (let k = 0; k < n * n; k++) { okCells += ok[k]; clearCells += clear[k]; }
+  console.log('eroded floor', { okCells, clearCells, radiusCells: (W.bodyRadius / cell).toFixed(1) });
+  assert(clearCells < okCells && clearCells > 0, 'erosion removes a band round the rock and keeps the open floor');
+  assert(c.walkable(0.12, 0) && !c.bodyClear(0.12, 0), 'a point 0.12 from the rock is floor for a foot but not for the body');
+  assert(c.bodyClear(0.35, 0), 'the body fits well away from it');
+  assert(!c.bodyClear(0, 0) && !c.walkable(0, 0), 'the rock itself is neither');
+  const [lx, ly] = c.nearestWalkable(0.12, 0);
+  assert(c.bodyClear(lx, ly) && Math.hypot(lx, ly) >= W.bodyRadius, `the nearest landing spot fits the body (${lx.toFixed(2)}, ${ly.toFixed(2)})`);
+  assert(Math.abs(c.topOver(0.4, 0.4) - W.floorZ) < 1e-6 && Math.abs(c.topOver(0, 0) - 0.4) < 1e-6 && Math.abs(c.topOver(0.14, 0) - 0.4) < 1e-6, 'the top map reads the rock within the body radius and the floor beyond');
+  w.ground = null;
+}
 
 // 7. Grooming: DNg11 above its rest while standing lifts and rubs the front legs; quiet, never.
 c.flight.enabled = false;
@@ -216,4 +235,4 @@ c.groom.active = false; c.groom.cooldown = 0; c.groom.ema = 22; const count = c.
 for (let i = 0; i < 2000; i++) c.stepGroom(quiet, data, 0.001);
 assert.equal(c.groom.count, count, 'a resting DNg11 never grooms');
 assert(Array.from(data.qpos).every(Number.isFinite) && Array.from(brain.v).every(Number.isFinite), 'finite');
-console.log('PASS: side pools, one-sided drive, labellar and tarsal sugar by contact, smell, lateral odour, the plume, feeding at the sack, the sack running out and refilling, daylight, shade, a passing shadow, lateral looming, receding object, crossing object on LC11, ball touch, bitter plants, world off, walkable floor, grooming');
+console.log('PASS: side pools, one-sided drive, labellar and tarsal sugar by contact, smell, lateral odour, the plume, feeding at the sack, the sack running out and refilling, daylight, shade, a passing shadow, lateral looming, receding object, crossing object on LC11, ball touch, bitter plants, world off, walkable floor, the body clearance, grooming');
