@@ -15,6 +15,18 @@ it stays where the visitor put it, keeps the fly in view by turning, and when th
 opaque geometry hides the fly it slides along its orbit to the nearest clear angle at a bounded
 rate (one raycast every sixth frame; the visitor's own drag still wins).
 
+The hand in the terrarium: a tap on the fly is a touch on that flank; a drag on the beach ball
+picks it up. The ball stays a dynamic body while held — each frame its velocity is set to carry
+it to where the pointer points on the plane through its centre, capped at 4 cm/s — so it still
+collides with the fly and the terrain, and on release it keeps the hand's last speed (up to
+8 cm/s), so it can be rolled at the fly, thrown past it or set down. What the fly makes of it
+is the world's business: the ball looms by its real approach on the eye it approaches, bumps
+as a touch on that flank, and is seen by the eyes. Measured in headless Chromium: a ball
+dragged at the fly from 0.6 cm raised the looming level to 0.67 and the escape drive to 95 Hz
+(the takeoff threshold is 100), then the bump read as a touch of 1.0; the fly stood its ground
+that time. The speed button asks for 1×, 2× or 4× simulated time per real second; the
+achieved factor is in Inspect.
+
 Sugar starts enabled after resting calibration. The counter accumulates feeding motor spikes
 while sugar is enabled; it holds during pause or when sugar is off. The neural map highlights
 sampled firing neurons and their outgoing connections. Sensory glow increases only while sugar

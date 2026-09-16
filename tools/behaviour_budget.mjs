@@ -34,7 +34,7 @@ const app = fs.readFileSync('dist/app.js', 'utf8');
 const start = app.indexOf('// ---------------------------------------------------------------- pose hold');
 const end = app.indexOf('// ---------------------------------------------------------------- main', start);
 vm.runInContext(app.slice(start, end) + `
-globalThis.controller = { resetSim, buildDriveMap, buildShuffleMap, buildFlightMap, buildWorldMap, stepSimulation, flight, world, WORLD, shuffle, groom };`, context);
+globalThis.controller = { resetSim, buildDriveMap, buildShuffleMap, buildFlightMap, buildWorldMap, stepSimulation, stepMs, flight, world, WORLD, shuffle, groom };`, context);
 const c = context.controller;
 c.resetSim(); c.buildDriveMap(model, brain); c.buildShuffleMap(); c.buildFlightMap(); c.buildWorldMap();
 
@@ -43,7 +43,7 @@ const add = (bucket, k, ms) => { bucket[k] = (bucket[k] || 0) + ms; };
 let feedSpikesAtDay = 0, feedSpikesAtNight = 0, lastSpikes = brain.feedSpikes;
 const t0 = performance.now();
 for (let ms = 0; ms < seconds * 1000; ms++) {
-  for (let i = 0; i < 10; i++) c.stepSimulation();
+  c.stepMs();
   const bucket = c.world.day >= 0.5 ? budget.day : budget.night;
   const st = c.flight.state;
   const k = st === 'walk' ? 'walking' : st === 'takeoff' || st === 'flight' || st === 'landing' || st === 'settle' ? 'flying'

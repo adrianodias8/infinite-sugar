@@ -34,7 +34,7 @@ const start = app.indexOf('// --------------------------------------------------
 const end = app.indexOf('// ---------------------------------------------------------------- main', start);
 assert(start >= 0 && end > start, 'controller section must exist');
 vm.runInContext(app.slice(start, end) + `
-globalThis.controller = { resetSim, buildDriveMap, buildShuffleMap, buildFlightMap, buildWorldMap, stepSimulation, stepShuffle,
+globalThis.controller = { resetSim, buildDriveMap, buildShuffleMap, buildFlightMap, buildWorldMap, stepSimulation, stepMs, stepShuffle,
   shuffle, flight, world, get legs() { return shuffleLegs; }, get hold() { return holdCtrl; },
   setNeural(value) { neural = value; } };`, context);
 const c = context.controller;
@@ -44,7 +44,7 @@ c.resetSim(); c.buildDriveMap(model, brain); c.buildShuffleMap(); c.buildFlightM
 c.world.enabled = false; c.flight.enabled = false;
 
 function advance(seconds) {
-  for (let i = 0; i < Math.round(seconds * 10000); i++) c.stepSimulation();
+  for (let i = 0; i < Math.round(seconds * 1000); i++) c.stepMs();
 }
 function state() {
   assert(Array.from(data.qpos).every(Number.isFinite), 'finite qpos');

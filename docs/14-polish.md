@@ -163,6 +163,11 @@ is measured before it is trusted.
 
 - The world costs one raycast grid at load and a handful of vector operations per brain tick;
   nothing per neuron. Keep it that way. The ground map (56 × 56) is the only allocation.
+  **Measured** (node, build machine, per simulated second): the brain 1.1 s, physics 2.8 s at
+  ten substeps per millisecond, the world, actuators and gait 0.06 s. **Done**: five
+  substeps (0.2 ms), stable and identical in every suite, physics 1.4 s; a simulated second
+  from 4.7 to about 3.3 s of wall time. A speed control asks for 1×, 2× or 4×. The brain's
+  kernel is the remaining cost; a WebAssembly kernel or a worker thread would be the next step.
 - Wing kinematics write six joints per physics step; fine. The stride writes twelve leg
   actuators per brain tick; fine.
 - Mobile: re-run `docs/10` viewports with a flight and a walk; the follow camera's per-frame

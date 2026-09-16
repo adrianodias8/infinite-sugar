@@ -46,6 +46,8 @@ canvas{display:block;position:fixed;inset:0;z-index:0;touch-action:none}
 #eyes{position:static;inset:auto;z-index:auto;display:block;width:100%;height:auto;border-radius:6px;background:#100d13;margin:0 0 10px}
 #senses th{font-weight:400;text-align:left;opacity:.55;padding:0 0 6px}
 #senses td:not(:first-child),#senses th:not(:first-child){text-align:right;padding-left:8px}
+.speed-button{min-width:44px;height:44px;padding:0 10px;border:1px solid #ffffff29;border-radius:22px;background:#19151b66;font-size:13px;font-variant-numeric:tabular-nums}
+.speed-button.on{border-color:#ffffff70;color:var(--sugar)}
 .sound-button .sound-wave{opacity:.35}
 .sound-button.on .sound-wave{opacity:1}
 .sound-button.on{border-color:#ffffff70}

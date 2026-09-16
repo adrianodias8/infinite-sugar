@@ -33,14 +33,14 @@ const start = app.indexOf('// --------------------------------------------------
 const end = app.indexOf('// ---------------------------------------------------------------- main', start);
 assert(start >= 0 && end > start, 'controller section must exist');
 vm.runInContext(app.slice(start, end) + `
-globalThis.controller = { resetSim, buildDriveMap, buildShuffleMap, buildFlightMap, buildWorldMap, stepSimulation, stepFlight,
+globalThis.controller = { resetSim, buildDriveMap, buildShuffleMap, buildFlightMap, buildWorldMap, stepSimulation, stepMs, PHYS_SUBSTEPS, stepFlight,
   flight, FLIGHT, WALK, WORLD, shuffle, stimPulse, world, walkable, erodeOk, get wings() { return wingJoints; }, get hold() { return holdCtrl; } };`, context);
 const c = context.controller;
 c.resetSim(); c.buildDriveMap(model, brain); c.buildShuffleMap(); c.buildFlightMap(); c.buildWorldMap();
 c.world.enabled = false;   // the senses here are scripted; tools/world_test.mjs covers the world
 const f = c.flight, F = c.FLIGHT;
 
-function advance(seconds) { for (let i = 0; i < Math.round(seconds * 10000); i++) c.stepSimulation(); }
+function advance(seconds) { for (let i = 0; i < Math.round(seconds * 1000); i++) c.stepMs(); }
 function finite() { assert(Array.from(data.qpos).every(Number.isFinite), 'finite qpos'); }
 const yawJoint = mujoco.mj_name2id(model, 3, 'wing_yaw_left');
 const yawAdr = model.jnt_qposadr[yawJoint];
@@ -71,7 +71,7 @@ assert.equal(f.state, 'flight');
 finite();
 assert(data.qpos[2] > 0.3, `airborne (z=${data.qpos[2].toFixed(3)})`);
 let yawMin = Infinity, yawMax = -Infinity;
-for (let i = 0; i < 1000; i++) { c.stepSimulation(); yawMin = Math.min(yawMin, data.qpos[yawAdr]); yawMax = Math.max(yawMax, data.qpos[yawAdr]); }
+for (let i = 0; i < 100; i++) { c.stepMs(); yawMin = Math.min(yawMin, data.qpos[yawAdr]); yawMax = Math.max(yawMax, data.qpos[yawAdr]); }
 assert(yawMax - yawMin > 0.8, `wings beat (sweep ${(yawMax - yawMin).toFixed(2)} rad over 0.1 s)`);
 // heading follows the steering asymmetry sign
 let asymSum = 0, n = 0; const yaw0 = f.yaw;
@@ -127,9 +127,8 @@ const TRIPOD_A = new Set(['T1_left', 'T2_right', 'T3_left']);
 const claws = legs.map(l => mujoco.mj_name2id(model, 1, `claw_${l}`));
 const slips = legs.map(() => []), stanceStart = legs.map(() => null);
 let swMin = Infinity, swMax = -Infinity;
-for (let i = 0; i < 10000; i++) {
-  c.stepSimulation(); swMin = Math.min(swMin, data.ctrl[swingAi]); swMax = Math.max(swMax, data.ctrl[swingAi]);
-  if (i % 10) continue;
+for (let i = 0; i < 1000; i++) {
+  c.stepMs(); swMin = Math.min(swMin, data.ctrl[swingAi]); swMax = Math.max(swMax, data.ctrl[swingAi]);
   const hx = Math.cos(f.yaw), hy = Math.sin(f.yaw);
   legs.forEach((l, k) => {
     const ph = (f.walk.phase + (TRIPOD_A.has(l) ? 0 : Math.PI)) % (2 * Math.PI), b = claws[k];

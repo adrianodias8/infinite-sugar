@@ -36,14 +36,14 @@ const begin = app.indexOf('    // ---- loop');
 const end = app.indexOf("    addEventListener('resize'", begin);
 assert(begin >= 0 && end > begin);
 let time = 0, renders = 0, steps = 0, visibility;
-const simulated = {paused:true};
+const simulated = {paused:true, speed:1 };
 const doc = {hidden:false,addEventListener:(_name, fn)=>{visibility=fn;}};
 const scope = vm.createContext({
   performance:{now:()=>time}, requestAnimationFrame:()=>{}, document:doc,
   quality:new AdaptiveQuality(), sim:simulated,
   $:()=>({hasAttribute:()=>false}), brain:{sugarFeedSpikes:0},
   controls:{update:()=>{}}, renderer:{render:()=>renders++}, scene:{}, camera:{},
-  neuralMap:{draw:()=>{}}, stepBall:()=>{}, stepSack:()=>{}, stepSound:()=>{}, stepEyes:()=>{}, drawEyes:()=>{}, vision:{retina:null,active:false}, statusSentence:()=>'', stepRipples:()=>{}, stepLighting:()=>{}, stepLoomDisc:()=>{}, applyQuality:()=>{},
+  neuralMap:{draw:()=>{}}, stepBall:()=>{}, stepGrab:()=>{}, PHYS_TIMESTEP:2e-4, stepSack:()=>{}, stepSound:()=>{}, stepEyes:()=>{}, drawEyes:()=>{}, vision:{retina:null,active:false}, statusSentence:()=>'', stepRipples:()=>{}, stepLighting:()=>{}, stepLoomDisc:()=>{}, applyQuality:()=>{},
   stepSimulation:()=>steps++, syncGeoms:()=>{}, model:{}, data:{}, loom:{active:false}, syncStimUI:()=>{}, flight:{state:'ground',count:0,escape:0,walk:{count:0}}, stepFollow:()=>{}, world:{enabled:true,day:1,levels:{sweet:0,sweetLeg:0,bitter:0,object:0},loomers:[]}, groom:{active:false},
 });
 vm.runInContext(app.slice(begin,end)+'\nglobalThis.tick=frame; globalThis.clock=()=>({last,acc,nextFrameAt});',scope);

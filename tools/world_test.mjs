@@ -35,12 +35,12 @@ const end = app.indexOf('// ----------------------------------------------------
 assert(start >= 0 && end > start, 'controller section must exist');
 vm.runInContext(app.slice(start, end) + `
 globalThis.controller = { resetSim, buildDriveMap, buildShuffleMap, buildFlightMap, buildWorldMap, stepSimulation,
-  stepWorld, world, WORLD, flight, stimWorld, poke, walkable, nearestWalkable, bodyClear, erodeOk, topOver, plantAt, stepGroom, groom };`, context);
+  stepWorld, world, WORLD, flight, stimWorld, poke, walkable, nearestWalkable, bodyClear, canStep, erodeOk, obstacleDistance, topOver, plantAt, stepGroom, groom, stepMs };`, context);
 const c = context.controller;
 c.resetSim(); c.buildDriveMap(model, brain); c.buildShuffleMap(); c.buildFlightMap(); c.buildWorldMap();
 const w = c.world, W = c.WORLD;
 c.flight.enabled = false;   // senses only; locomotion is covered by tools/flight_test.mjs
-const advance = s => { for (let i = 0; i < Math.round(s * 10000); i++) c.stepSimulation(); };
+const advance = s => { for (let i = 0; i < Math.round(s * 1000); i++) c.stepMs(); };
 const lr = k => brain.stimLR[k];
 const head = () => { const b = mujoco.mj_name2id(model, 1, 'head'); return [data.xpos[b * 3], data.xpos[b * 3 + 1]]; };
 
@@ -214,6 +214,12 @@ assert(c.walkable(nx, ny), 'nearest walkable point is walkable');
   const [lx, ly] = c.nearestWalkable(0.12, 0);
   assert(c.bodyClear(lx, ly) && Math.hypot(lx, ly) >= W.bodyRadius, `the nearest landing spot fits the body (${lx.toFixed(2)}, ${ly.toFixed(2)})`);
   assert(Math.abs(c.topOver(0.4, 0.4) - W.floorZ) < 1e-6 && Math.abs(c.topOver(0, 0) - 0.4) < 1e-6 && Math.abs(c.topOver(0.14, 0) - 0.4) < 1e-6, 'the top map reads the rock within the body radius and the floor beyond');
+  // a tight start: from a floor cell beside the rock the body may step away from it, never toward it
+  w.ground.dist = c.obstacleDistance(ok, n, W.bodyRadius / cell);
+  assert(!c.bodyClear(0.175, 0) && c.canStep(0.175, 0, 0.225, 0), 'beside the rock, a step away is allowed');
+  assert(!c.canStep(0.225, 0, 0.175, 0), 'a step toward it is not');   // cell centres: 0.175 is two cells from the rock, 0.225 three
+  assert(!c.canStep(0.175, 0, 0.075, 0), 'nor a step onto it');
+  assert(c.bodyClear(0.275, 0) && c.canStep(0.275, 0, 0.325, 0) && c.canStep(0.325, 0, 0.275, 0), 'and on clear floor every step is');
   w.ground = null;
 }
 
