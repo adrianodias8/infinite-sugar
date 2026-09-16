@@ -273,6 +273,7 @@ async function loadProps(scene: THREE.Scene, flyBox: THREE.Box3) {
 // low render framerate, rather than a hand-clamped frame delta.
 let ball: BallState | null = null;
 let ballWorld: CANNON.World | null = null;
+const FLY_PROXY_RADIUS = 0.18;   // cm, the body with its legs (measured extents: legs to 0.18, thorax 0.05)
 const ballTilt = { phase: 0 };
 const viewOccluders: THREE.Mesh[] = [];   // the terrarium's opaque meshes, for the camera's line of sight
 const _ray = new THREE.Raycaster();      // still used once at load, to find the "hilltop" start
@@ -414,8 +415,11 @@ async function loadBall(scene: THREE.Scene, flyBox: THREE.Box3, hillMeshes: THRE
   // MuJoCo position — genuinely one-way, not a hand-rolled approximation of one-way. The fly's
   // real physics is never written to; cannon-es's own kinematic/dynamic contact handles the push.
   const thoraxBody = mujoco.mj_name2id(model, 1 /* mjOBJ_BODY */, 'thorax');
+  // The proxy is the body, not the wingspan: half the wingspan (0.32) kept the ball 0.5 cm from
+  // the thorax, where its approach never looms hard enough to launch the fly. The legs reach
+  // 0.18 from the root; the ball may roll in to there and bump.
   const flyProxy = new CANNON.Body({ mass: 0, type: CANNON.Body.KINEMATIC,
-                                      shape: new CANNON.Sphere(flySpan * 0.5), material: groundMat });
+                                      shape: new CANNON.Sphere(FLY_PROXY_RADIUS), material: groundMat });
   physicsWorld.addBody(flyProxy);
   // The ball touching the fly is a touch on that flank (cannon-es contact events; the fly's
   // physics is still never written to).
@@ -897,7 +901,7 @@ const WORLD = {
   contrastGain: 0.05,  // visual level per unit brightness change per second (a passing shadow is a transient)
   tasteReach: 0.03,    // the labellum tastes within this of the sack's surface; the feet within footReach of its base
   footReach: 0.04,
-  loomRange: 1.2, loomTau: 0.6,   // objects closer than loomRange on a collision course within loomTau seconds loom
+  loomRange: 1.2, loomTau: 1.0,   // objects closer than loomRange on a collision course within loomTau seconds loom (a hand-rolled ball at 2 cm/s from 0.6 cm reads 0.5 and launches the fly; 0.6 s left it just under the threshold)
   objectRange: 1.5, objectRate: 2.0,   // a small object crossing the view within objectRange at objectRate rad/s drives LC11 fully
   floorZ: -0.132,      // the physics floor; the terrarium's visual floor undulates just above it
   floorBand: 0.23,     // ground hits up to this far above floorZ count as walkable floor (the floor undulates to +0.10)
@@ -2320,7 +2324,7 @@ function stepMs() { for (let i = 0; i < PHYS_SUBSTEPS; i++) stepSimulation(); }
 
     // ---- loop
     const timestep = PHYS_TIMESTEP;                 // see PHYS_SUBSTEPS
-    let last = performance.now(), acc = 0, fps = 0, fpsT = last, frames = 0, sps = 0, spsN = 0, spsT = last;
+    let last = performance.now(), acc = 0, simDt = 0, fps = 0, fpsT = last, frames = 0, sps = 0, spsN = 0, spsT = last;
     let nextFrameAt = last, mapAt = 0, hudAt = 0, loomShown = false, flightShown = '';
     // Browser suspension must never become a backlog of simulation work on return.
     document.addEventListener('visibilitychange', () => {
@@ -2350,7 +2354,7 @@ function stepMs() { for (let i = 0; i < PHYS_SUBSTEPS; i++) stepSimulation(); }
           stepSimulation();
           acc -= timestep; n++;
         }
-        spsN += n;
+        spsN += n; simDt = n * timestep;
 
         syncGeoms(model, data);
       }
@@ -2401,7 +2405,10 @@ function stepMs() { for (let i = 0; i < PHYS_SUBSTEPS; i++) stepSimulation(); }
       $('s_cnt').textContent  = brain.sugarFeedSpikes.toLocaleString();
 
       stepGrab(wall);
-      if (!sim.paused) stepBall(wall * sim.speed);
+      // The ball moves in the fly's time, not the clock's: the brain usually runs below real time
+      // and a ball rolled at wall speed would arrive before the escape circuit had the
+      // milliseconds to see it coming. A throw looks slow when the machine lags; the fly's view is right.
+      if (!sim.paused) stepBall(simDt); simDt = 0;
       stepEyes(now);
       stepSack();
       stepSound();
