@@ -22,9 +22,11 @@ collides with the fly and the terrain, and on release it keeps the hand's last s
 8 cm/s), so it can be rolled at the fly, thrown past it or set down. What the fly makes of it
 is the world's business: the ball looms by its real approach on the eye it approaches, bumps
 as a touch on that flank, and is seen by the eyes. Measured in headless Chromium: a ball
-dragged at the fly from 0.6 cm raised the looming level to 0.67 and the escape drive to 95 Hz
-(the takeoff threshold is 100), then the bump read as a touch of 1.0; the fly stood its ground
-that time. The speed button asks for 1×, 2× or 4× simulated time per real second; the
+rolled at the fly from 0.6 cm raises the looming level to 0.87 and the escape drive to 173 Hz,
+and the fly takes off with the ball still 0.47 cm away (an earlier proxy as wide as the
+wingspan kept the ball too far out to alarm it, see [13-world.md](13-world.md)); a slow roll
+that reaches the fly reads as a touch of 1.0 on that flank. The ball moves in the fly's own
+time, so a throw looks slow when the machine runs below real time. The speed button asks for 1×, 2× or 4× simulated time per real second; the
 achieved factor is in Inspect.
 
 Sugar starts enabled after resting calibration. The counter accumulates feeding motor spikes

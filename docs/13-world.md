@@ -85,7 +85,7 @@ DNs +17 %; nothing that moves a joint on its own, which is the honest result.
 | odour | the plume: the still-air fall-off from the sack, carried downwind by a fixed draught (toward the perch) in a cone 0.12 cm wide at the sack widening by 0.35 per cm; a quarter of the still-air level elsewhere. Each antenna samples the field 0.035 cm to its side of the head, and the antenna facing the sack gets the larger share | 0.8 at the patch, zero 0.8 cm beyond it, × the sugar left |
 | light | in the page: the eyes — the terrarium rendered from the head, each of the 11,424 photoreceptors driven by the luminance in its own direction plus a transient from its rate of change ([docs/15-vision.md](15-vision.md)). Without a renderer (the tests, the first frames): a 120 s day, starting at noon, shaded by anything between the fly and the sun, plus the same transient term | per cell: 0.35 × luminance + 0.05 × \|d lum/dt\| (50 ms filtered), capped at 1; scalar path: 0.35 × daylight × (1 − shade) + the transient |
 | heat / cool / damp | the same day | hot cells above 65 % daylight, cold, cooling and hygrosensory cells below 35 % |
-| looming | the beach ball, by time to collision from its real position and velocity, on the eye it approaches; the loom sphere by its own event | 1 − τ/0.6 s, scaled by angular size, within 1.2 cm |
+| looming | the beach ball, by time to collision from its real position and velocity, on the eye it approaches; the loom sphere by its own event | 1 − τ/1.0 s, scaled by angular size, within 1.2 cm |
 | object (LC11) | a small object crossing the view, by its angular velocity about the fly, on that side | (ω / 2 rad/s), fading as it fills the view, within 1.5 cm |
 | touch | the ball hitting the fly (cannon-es contact), on that flank; a tap | the poke pulse |
 | bitter | the labellum against foliage or a flower (plant cells of the floor map, found by the glTF's material colours) | 1 in contact |
@@ -148,6 +148,18 @@ actuators and gait under 0.06 s; a simulated second went from 4.7 to about 3.3 s
 The brain's kernel is the next cost and stays JavaScript for now. A speed control (1× / 2× /
 4×) only changes how much simulated time a frame asks for; Inspect shows what the machine
 achieves.
+
+**The ball can bother the fly.** Checked after a report that it could not: the fly's collision
+proxy for the ball was a sphere of half the wingspan (0.32 cm), so a rolled ball stopped 0.5 cm
+from the thorax, where its approach read 0.6 at most and the escape drive 95 Hz, five under the
+takeoff threshold. Three changes: the proxy is the body with its legs (0.18); the looming
+horizon is 1.0 s rather than 0.6 (a ball at 2 cm/s from 0.6 cm reads 0.5, one at 3 cm/s 0.56;
+the world test's ball from the left reads 0.70); and the ball advances in the fly's own time,
+not the clock's, because the brain usually runs below real time and a ball moved at wall speed
+arrived before the escape circuit had the milliseconds to see it coming (a throw looks slow
+when the machine lags; the fly's view is right). Measured in headless Chromium: a ball rolled
+at the fly by hand from 0.6 cm now reads 0.87 at 0.4 cm, the escape drive 173 Hz, and the fly
+takes off with the ball still 0.47 cm away. A ball left to roll on its own (0.1 cm/s) reads 0.
 
 ## The fly decides
 
