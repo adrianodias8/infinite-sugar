@@ -82,6 +82,39 @@ honesty work of stating which of the 1.4× more neurons the browser can afford (
 is ~1.1 s per simulated second for 139k). First step: a feasibility run of BANC in
 `tools/response_matrix.py` (does a DNp09 drive raise the T1–T3 motor pools?).
 
+**Feasibility run, 2026-09-17** (`tools/banc_feasibility.py`, from the public bucket
+`lee-lab_brain-and-nerve-cord-fly-connectome`, v888 meta and the simple edgelist, both
+CC-BY 4.0 and never committed). 175,401 neurons after dropping glia, 1,924,810 edges at ≥ 5
+synapses, signs from BANC's predicted transmitter with its verified column overriding
+(60,651 neurons). BANC labels the pools this project would need: DNp09, MDN, DNa01, DNa02,
+DNp02/04/11, DNp01, DNg11 all present (2–5 cells each); 393 leg motor neurons by leg and by
+muscle (101 tibia flexors, 62 trochanter flexors, 34 femur reductors, …), 24 wing power and
+24 wing steering motor neurons, 15 haltere, 81 neck. The same NumPy LIF as
+`response_matrix.py`, each DN driven at 3× the browser's standard drive, 1 s each:
+
+    stimulus       pop |  front_leg  middle_leg   hind_leg  tibia_flex  femur_red  troch_flex  wing_power  wing_steer    neck  haltere
+    (none)        12.0 |    15.9Hz     19.0Hz     13.0Hz      6.5Hz      3.9Hz      9.8Hz     88.6Hz     70.9Hz   18.8Hz   18.1Hz
+    DNp09         12.0 |      -7%       -10%       -13%        -5%        -3%        -7%       -12%        -7%      +5%      -7%
+    MDN           12.0 |      +2%        -6%        -9%        -6%       +49%       -16%        -5%        -2%      -3%      -8%
+    DNa01         12.0 |      +5%        -6%        -8%        -3%        +2%       -12%        -1%        -1%      +2%      +4%
+    DNa02         12.0 |      -2%        -4%       -11%        +0%       +44%       -10%        -6%        -5%     +10%      -7%
+    DNp02+04+11   12.2 |      -7%       -14%        +4%       +30%       -36%       +15%       +47%       +19%      -3%     +76%
+    DNp01         12.1 |      +3%        +2%        -0%        +8%        +8%        -5%        +3%        +0%      +2%      +0%
+    DNg11         12.0 |      -2%        -3%        -3%        +8%       -10%       -16%        -2%        -6%      -7%      -5%
+
+What it says. The escape command reaches the flight motor through the cord: DNp02/04/11 raise
+the wing power motor neurons +47 %, the wing steering +19 % and the haltere +76 %, and flex the
+tibiae +30 % (the jump). The backward-walking command and the steering DNa02 both raise the
+femur reductors (+49 %, +44 %). The forward-walking command DNp09 does NOT raise any leg pool
+in this integrator: two cells into a cord whose motor pools already rest hot (wing power at
+89 Hz, three times this brain's whole-brain rate) are not enough, and the walking central
+pattern generators are exactly the temporal circuits a memoryless LIF without synaptic time
+constants underplays. So: a BANC fly would give this project real wing and haltere motor
+output for its escape flight today, and honest measured leg output for backing and turning;
+a connectome gait would need the cord's own rhythm, which needs the dynamics of item 6 or a
+kernel with synaptic time constants (Shiu's 5 ms). The graph is 1.26× this one; the
+WebAssembly kernel would carry it.
+
 ### 4. Speed: a worker thread, not a GPU — done ([17-threads-and-kernels.md](17-threads-and-kernels.md))
 
 webgpu-fly's WebGPU kernel reaches 0.25 kHz on an M2 Pro (memory-bound); this JS kernel does
