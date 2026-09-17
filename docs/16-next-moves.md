@@ -66,7 +66,7 @@ walking DN +200 % (one-sided: the wind cells 168 / 4 Hz).
 
 ## The plan, in order
 
-### 3. A whole-CNS fly: BANC (largest fidelity gain)
+### 3. A whole-CNS fly: BANC (largest fidelity gain) — feasibility run done, see below
 
 The gait, the wingbeat and every leg movement here are supplied because FAFB is brain-only.
 The **BANC** connectome (Harvard Dataverse, CC-BY 4.0, no login; ~188,000 neurons, 199 M
@@ -82,7 +82,7 @@ honesty work of stating which of the 1.4× more neurons the browser can afford (
 is ~1.1 s per simulated second for 139k). First step: a feasibility run of BANC in
 `tools/response_matrix.py` (does a DNp09 drive raise the T1–T3 motor pools?).
 
-### 4. Speed: a worker thread, not a GPU
+### 4. Speed: a worker thread, not a GPU — done ([17-threads-and-kernels.md](17-threads-and-kernels.md))
 
 webgpu-fly's WebGPU kernel reaches 0.25 kHz on an M2 Pro (memory-bound); this JS kernel does
 ~0.9 kHz on the build container, so the GPU is not the win. The win is parallelism: the brain
@@ -92,16 +92,20 @@ brain, exchanging one frame's worth of stimulus levels and rates through a Share
 the two. Sensory levels would lag the body by one frame (16 ms), inside a real fly's
 transduction delays. Cost: a day; the determinism test must still pass.
 
-### 5. The eye from the measured lattice
+### 5. The eye from the measured lattice — blocked on data
 
 The retinotopy is inferred by rank ([15-vision.md](15-vision.md)). Closed-Loop Fly samples the
 scene at the connectome's 1,771 column directions (MaleCNS). For FlyWire the optic-lobe paper
 (Matsliah et al. 2024) assigned columns to visual neurons; if its per-neuron column table is
 obtainable (Codex is blocked from this build machine), `tools/build_retina.py` should take it
 in place of the rank map. The FlyGym numbers to hold the field to: 721 ommatidia per eye,
-~270° combined field, ~5° acceptance.
+~270° combined field, ~5° acceptance. **Checked 2026-09-17:** the FlyWire annotations
+repository's supplemental files carry no column or hexagonal coordinates, the optic-lobe
+matching repository only cross-matches cell types, and Codex (the one place a column table
+would be) is unreachable from the build machine. The rank map stays until someone with Codex
+access exports the column assignments; `build_retina.py` is written to take them.
 
-### 6. Optic-lobe dynamics (flyvis)
+### 6. Optic-lobe dynamics (flyvis) — blocked on data
 
 The eyes deliver an image but a static dark sphere does not reach LC4 through the wiring:
 motion detection needs the temporal dynamics that connectome-constrained models (flyvis,
@@ -110,17 +114,41 @@ resting potential per type, trained once against the connectome and published. A
 published per-type constants to the optic-lobe cells is not learning in this simulation, but
 it does break "one LIF for every neuron". Worth an experiment behind a flag: do LC4/LPLC2
 then respond to a real looming sphere through the wiring, so the geometric looming channel can
-be retired?
+be retired? **Checked 2026-09-17:** the trained per-type constants live in flyvis's PyTorch
+checkpoints and its documentation site is unreachable from here; the repository README carries
+no parameter table. Nothing honest can be applied without them.
 
-### 7. Interaction (Help the Fly Escape, NeuroTerrarium)
+### 7. Interaction (Help the Fly Escape, NeuroTerrarium) — the sack is done
 
 The ball can be picked up; the sack could be too (drag it and the odour plume, the ground
 map's footprint and the fly's target move with it), and a second object to place (a rock)
 would let a visitor build the fly a maze the way the escape game does. Cost: small.
+**Done for the sack** ([08-artwork-presentation.md](08-artwork-presentation.md)): it slides to
+the pointer and snaps to floor its footprint fits, never onto the fly; the floor map, the
+plume and the fly's target follow. A movable rock would use the same placement.
 
-### 8. Cross-checks against the community's kernels
+### 8. Cross-checks against the community's kernels — the parameters, side by side
 
 Shiu et al.'s reference code, Eon's fly-brain and FastFly all run the same v783 graph. A
 one-page comparison of resting rates and the sugar → proboscis response across kernels would
 tell how much of what this fly does is the wiring and how much is the integrator. Cost: a
 script and an afternoon, if their parameter files are readable.
+
+**Read 2026-09-17**, Shiu et al.'s reference model (`model.py`, Brian 2) against this kernel:
+
+| | Shiu et al. (Brian 2) | this fly (`web/brain.ts` / `lif.c`) |
+|---|---|---|
+| membrane time constant | 20 ms | 20 ms (`DECAY = e^(-1/20)` per 1 ms step) |
+| rest / reset / threshold | −52 / −52 / −45 mV (7 mV to threshold) | 0 / 0 / 1.0 (membrane units) |
+| refractory | 2.2 ms | 2 ms |
+| synapse | 0.275 mV per synapse, 5 ms synaptic time constant, 1.8 ms delay | 0.005 units per synapse (3.9 % of threshold, vs 3.9 % of 7 mV = 0.275 mV: the same), instantaneous, excitation now / inhibition 4 ms later |
+| sign | "Excitatory × Connectivity" column (predicted transmitter) | predicted transmitter, overridden by the literature ground truth where known |
+| drive | Poisson spiking at 150 Hz in the stimulated neurons | +0.20 units per ms to the stimulated pool |
+| noise / baseline | none | 300 random kicks of 0.42 per ms; a tonic per-neuron baseline U(0, 0.06) per ms |
+| step | Brian 2's ODE integration | fixed 1 kHz, exact integer bookkeeping |
+
+The synaptic weight is the one number that agrees by construction; the delays, the synaptic
+time constant and the drive model differ, and this kernel adds the background noise that gives
+it a resting state at all (Shiu's model is silent at rest). Running their Brian 2 code here is
+left undone: the point of the table is that a response measured here should be read as this
+integrator's, and checked against theirs before it is called the fly's.

@@ -23,3 +23,6 @@ _to_delete/
 
 # Local legacy Sites preview configuration; production uses Cloudflare Pages.
 /.openai/
+
+# BANC feathers and the derived graph (tools/banc_feasibility.py): fetched from the public bucket, never committed
+data/banc/

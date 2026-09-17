@@ -24,12 +24,16 @@ npm ci
 Open [localhost:7377](http://localhost:7377). The first load takes a few seconds.
 The browser code is TypeScript, compiled to unbundled JavaScript in `dist/`.
 `npm run typecheck` checks the source; `npm test` builds and checks the simulation.
-The local server builds once at startup; restart it after editing source files.
+The local server builds once at startup; restart it after editing source files. The brain's
+kernel is also compiled to WebAssembly (`web/kernel/lif.c`; `tools/build_kernel.sh` needs
+clang with the wasm32 target) and runs on a worker thread; `?brain=sync` runs it in-thread,
+which the tests do (see [docs/17-threads-and-kernels.md](docs/17-threads-and-kernels.md)).
 
 ## Controls
 
 Name the fly to begin. Drag to orbit and scroll to zoom. Tap the fly to touch it; drag the
-beach ball to pick it up, roll it at the fly or throw it (it looms, bumps and is seen). The fly lives
+beach ball to pick it up, roll it at the fly or throw it (it looms, bumps and is seen); drag
+the sugar sack to set it down elsewhere (the smell moves with it). The fly lives
 on its own: it sees the terrarium through its own photoreceptors, smells the sugar sack, walks
 in bouts when its walking neurons ask, feeds when it reaches the sugar, takes off when
 something looms, turns away from threats and toward smells, and lands wherever it is calm (see

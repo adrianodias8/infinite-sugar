@@ -12,6 +12,8 @@
     "web/entry.ts",
     "web/app.ts",
     "web/brain.ts",
+    "web/brain-proxy.ts",
+    "web/brain-worker.ts",
     "web/neural-map.ts",
     "web/performance.ts",
     "web/vendor/mujoco_wasm.d.ts"
