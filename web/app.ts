@@ -7,6 +7,8 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import loadMujoco from './vendor/mujoco_wasm.js';
 import { Brain } from './brain.js';
+import type { BrainAPI } from './brain.js';
+import { BrainProxy } from './brain-proxy.js';
 import { createNeuralMap } from './neural-map.js';
 import { AdaptiveQuality } from './performance.js';
 import * as CANNON from 'cannon-es';
@@ -40,7 +42,7 @@ const G = { PLANE:0, HFIELD:1, SPHERE:2, CAPSULE:3, ELLIPSOID:4, CYLINDER:5, BOX
 let mujoco: MujocoModule;
 let model: MjModel;
 let data: MjData;
-let brain: Brain;
+let brain!: BrainAPI;   // assigned in main; the definite-assignment mark lets the worker/in-thread choice below read it unset
 const sim = { paused:false, steps:0, t0:0, brainStartMs:0, speed:1 };   // speed: how many simulated seconds a real second asks for (Inspect shows what it gets)
 const geomNodes: GeomNode[] = [];
 const tmpMat = new THREE.Matrix4();
@@ -276,6 +278,7 @@ let ballWorld: CANNON.World | null = null;
 const FLY_PROXY_RADIUS = 0.18;   // cm, the body with its legs (measured extents: legs to 0.18, thorax 0.05)
 const ballTilt = { phase: 0 };
 const viewOccluders: THREE.Mesh[] = [];   // the terrarium's opaque meshes, for the camera's line of sight
+let placeSack: ((x: number, y: number) => boolean) | null = null;   // set once the terrarium has loaded (the sack can be moved)
 const _ray = new THREE.Raycaster();      // still used once at load, to find the "hilltop" start
 const _down = new THREE.Vector3(0, 0, -1);
 function groundUnder(meshes: THREE.Object3D[], x: number, y: number) {
@@ -572,7 +575,7 @@ const WINGBIAS: Record<string, number> = {
   wing_yaw_left:   -0.0012, wing_yaw_right:  -0.0012,
   wing_pitch_left:  0.0000, wing_pitch_right: 0.0000,
 };
-function buildDriveMap(m: MjModel, b: Brain) {
+function buildDriveMap(m: MjModel, b: BrainAPI) {
   driveMap = DRIVE
     .map(d => {
       const ai = mujoco.mj_name2id(m, 19 /* mjOBJ_ACTUATOR */, d.act);
@@ -595,7 +598,7 @@ function buildDriveMap(m: MjModel, b: Brain) {
 //          sides, so the natural left/right rate difference survives as a real pose difference
 //          rather than being normalised away.
 //   gain — ratio to each pool's own measured resting rate (the motor-neuron pools).
-function activation(b: Brain, k: DriveEntry) {
+function activation(b: BrainAPI, k: DriveEntry) {
   let a;
   if (k.peak)      a = b.rate[k.role] / k.peak;
   else if (k.band) a = (b.rate[k.role] - k.band[0]) / (k.band[1] - k.band[0]);
@@ -608,7 +611,7 @@ function activation(b: Brain, k: DriveEntry) {
 }
 
 let neural = true;
-function applyBrainToActuators(b: Brain, d: MjData) {
+function applyBrainToActuators(b: BrainAPI, d: MjData) {
   for (const [ai, entries] of driveGroups) {
     const first = entries[0];
     const base = (first.raw ? first.raw[0] : holdCtrl[ai]) + (WINGBIAS[first.act] || 0);
@@ -677,7 +680,7 @@ function resetShuffle() {
   }
 }
 
-function stepShuffle(b: Brain, d: MjData, dt: number) {
+function stepShuffle(b: BrainAPI, d: MjData, dt: number) {
   const enabled = neural && shuffle.enabled;
   if (!enabled) {
     shuffle.active = -1; shuffle.charge = 0; shuffle.cooldown = 0.2;
@@ -899,6 +902,7 @@ const WORLD = {
   sugarEmpty: 180,     // seconds of feeding at full contact that empty the sack
   sugarRefill: 600,    // seconds for an empty sack to fill again (it is refilled, slowly)
   contrastGain: 0.05,  // visual level per unit brightness change per second (a passing shadow is a transient)
+  windLevel: 0.3,      // the draught on the antennae (JO wind cells), on the antenna it comes from; airspeed in flight adds up to the same again
   tasteReach: 0.03,    // the labellum tastes within this of the sack's surface; the feet within footReach of its base
   footReach: 0.04,
   loomRange: 1.2, loomTau: 1.0,   // objects closer than loomRange on a collision course within loomTau seconds loom (a hand-rolled ball at 2 cm/s from 0.6 cm reads 0.5 and launches the fly; 0.6 s left it just under the threshold)
@@ -922,7 +926,7 @@ const world = {
   loomers: [] as Loomer[],                               // written by main (ball) each frame
   touchHits: [] as number[],                             // bearings of contacts, queued by main
   ground: null as GroundMap | null,                      // walkable floor cells, sampled from the terrarium mesh
-  levels: { sweet:0, sweetLeg:0, bitter:0, odour:0, light:0, heat:0, cool:0, damp:0, looming:0, object:0, touch:0 },
+  levels: { sweet:0, sweetLeg:0, bitter:0, odour:0, light:0, heat:0, cool:0, damp:0, looming:0, object:0, touch:0, wind:0 },
   headBody: -1, labrumBodies: [] as number[], clawBodies: [] as number[],
 };
 function buildWorldMap() {
@@ -1109,6 +1113,14 @@ function stepWorld(d: MjData, dt: number) {
   const facing = lateral(1, bearingTo(d, S.x, S.y));
   L.odour = odourAt(hx, hy);
   setWorld('odour', facing[0] * antL, facing[1] * antR);
+  // --- the air: the draught that carries the odour also deflects the antennae (the JO wind/gravity
+  //     cells), more on the antenna it comes from; in flight the fly's own airspeed adds a headwind
+  //     on both. Supplied levels; which cells, from FlyWire's sub_class.
+  const windFrom = Math.atan2(-WORLD.draught[1], -WORLD.draught[0]);
+  const wd = lateral(WORLD.windLevel, wrapAngle(windFrom - yaw));
+  const air = flight.state === 'flight' || flight.state === 'landing' || flight.state === 'takeoff' ? WORLD.windLevel * Math.hypot(flight.vx, flight.vy) / FLIGHT.speed : 0;
+  L.wind = Math.min(1, Math.max(wd[0], wd[1]) + air);
+  setWorld('wind', Math.min(1, wd[0] + air), Math.min(1, wd[1] + air));
   // --- moving objects: looming by time to collision, on the eye they approach; and a small
   //     object crossing the view (angular velocity, not approach) for the LC11 detectors
   let lo = 0, ro = 0, ol = 0, or_ = 0; L.looming = 0; L.object = 0;
@@ -1257,6 +1269,7 @@ function sampleRetina(d: MjData, r: Retina, faces: EyeFaces, tNow: number, drive
   }
   for (let e = 0; e < 3; e++) r.meanEye[e] = cnt[e] ? sum[e] / cnt[e] : 0;
   vision.lastSample = tNow;
+  if (brain._cellAmt === r.amt) brain.syncCellDrive();   // the WebAssembly kernel keeps its own copy of the amounts
 }
 
 // ------------------------------------------------------------- locomotion
@@ -1302,7 +1315,11 @@ const FLIGHT = {
 const WALK = {
   speed: 0.22,        // cm/s forward (backward at 0.6x)
   yawRate: 1.5,       // rad/s at full steering asymmetry
-  boutPerSpike: 0.6,  // seconds of walking each DNp09 spike requests
+  boutPerSpike: 0.6,  // seconds of walking each DNp09 spike requests at a 0.6 Hz resting rate; scaled by
+                      // 0.6 / rest so the resting drive asks for the same share of walking whatever the
+                      // kernel's rest (rest-relative, like MDN's gate): 0.6 Hz with the predicted signs,
+                      // 3.8 Hz with the literature-corrected ones, which would otherwise never stop walking
+  restRate: 0.6,      // Hz, the DNp09 resting rate boutPerSpike was set against
   backGain: 2.5,      // MDN is tonic here (~17 Hz at rest); backward bouts while its 100 ms mean exceeds this multiple of rest
   boutMax: 2.0,
   stepHz: 2.2, lift: 0.006,   // tripod stepping cycle and the body lift while the feet swing
@@ -1413,7 +1430,7 @@ function stepFlight(b: BrainLike, d: MjData, dt: number) {
     const fwd = b.spikesOf('dn_walk');
     const backRest = b.rest && b.rest.dn_back || 0;
     const back = backRest > 0 ? (W.back > WALK.backGain * backRest ? dt * 1.5 : 0) : b.spikesOf('dn_back') * WALK.boutPerSpike * 0.67;
-    if (fwd > 0) { W.bout = Math.min(WALK.boutMax, W.bout + fwd * WALK.boutPerSpike); W.dir = 1; }
+    if (fwd > 0) { const restWalk = Math.max(WALK.restRate, (b.rest && b.rest.dn_walk) || WALK.restRate); W.bout = Math.min(WALK.boutMax, W.bout + fwd * WALK.boutPerSpike * WALK.restRate / restWalk); W.dir = 1; }
     else if (back > 0) { W.bout = Math.min(WALK.boutMax, W.bout + back); W.dir = -1; }
   }
   if (flight.state === 'ground') {
@@ -1694,9 +1711,18 @@ function stepMs() { for (let i = 0; i < PHYS_SUBSTEPS; i++) stepSimulation(); }
     model = mujoco.MjModel.loadFromXML('/w/' + SCENE_XML);
     data  = new mujoco.MjData(model);
 
-    brain = await Brain.load('./brain', say);
+    // The brain runs on its own thread (brain-proxy.ts) unless the page is opened with
+    // ?brain=sync or the browser has no module workers; the tests and the scripted checks use
+    // the in-thread brain, whose every millisecond is exactly reproducible.
+    const wantSync = new URLSearchParams(location.search).get('brain') === 'sync' || typeof Worker === 'undefined';
+    if (!wantSync) {
+      try { brain = await BrainProxy.load('./brain', say); }
+      catch (err) { console.warn('brain worker unavailable, running the brain in this thread', err); }
+    }
+    if (!brain) brain = await Brain.load('./brain', say);
+    const brainReady: BrainAPI = brain;
     say('calibrating resting rates');
-    await brain.calibrateResponsive(2500);
+    await brainReady.calibrateResponsive(2500);
     say('initializing renderer');
 
     // ---- three.js
@@ -1912,21 +1938,33 @@ function stepMs() { for (let i = 0; i < PHYS_SUBSTEPS; i++) stepSimulation(); }
         // surroundings are all floor (a first placement put it half inside a rock), and its
         // footprint then becomes an obstacle the feet stop at.
         if (sack) {
-          let best: [number, number] | null = null, bd = Infinity;
-          for (let j = 2; j < n - 2; j++) for (let i = 2; i < n - 2; i++) {
-            let clear = true;
-            for (let dj = -2; dj <= 2 && clear; dj++) for (let di = -2; di <= 2; di++) if (ok[(j + dj) * n + i + di] !== 1) { clear = false; break; }
-            if (!clear) continue;
-            const cx = x0 + (i + 0.5) * cell, cy = y0 + (j + 0.5) * cell;
-            const dd = (cx - world.sugar.x) ** 2 + (cy - world.sugar.y) ** 2;
-            if (dd < bd) { bd = dd; best = [cx, cy]; }
-          }
-          if (best) { sack.position.x = best[0]; sack.position.y = best[1]; world.sugar.x = best[0]; world.sugar.y = best[1]; }
-          sack.updateMatrixWorld(true);
-          for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
-            const cx = x0 + (i + 0.5) * cell, cy = y0 + (j + 0.5) * cell;
-            if (Math.hypot(cx - world.sugar.x, cy - world.sugar.y) < world.sugar.r + 0.02) { ok[j * n + i] = 0; world.ground.clear[j * n + i] = 0; world.ground.dist[j * n + i] = 0; top[j * n + i] = Math.max(top[j * n + i], sackTop); }
-          }
+          // The sack can be picked up and set down (the hand, below): the floor map without it
+          // is kept, and placing it stamps its footprint back in. It goes on the nearest spot
+          // whose 5x5 cells are floor and that is not under the fly.
+          const base = { ok: Uint8Array.from(ok), clear: Uint8Array.from(world.ground.clear), dist: Float32Array.from(world.ground.dist), top: Float32Array.from(top) };
+          placeSack = (x: number, y: number) => {
+            const g = world.ground; if (!g || !g.clear || !g.dist || !g.top) return false;
+            let best: [number, number] | null = null, bd = Infinity;
+            for (let j = 2; j < n - 2; j++) for (let i = 2; i < n - 2; i++) {
+              let clear = true;
+              for (let dj = -2; dj <= 2 && clear; dj++) for (let di = -2; di <= 2; di++) if (base.ok[(j + dj) * n + i + di] !== 1) { clear = false; break; }
+              if (!clear) continue;
+              const cx = x0 + (i + 0.5) * cell, cy = y0 + (j + 0.5) * cell;
+              if (Math.hypot(cx - data.qpos[0], cy - data.qpos[1]) < world.sugar.r + WORLD.bodyRadius + 0.05) continue;   // never onto the fly
+              const dd = (cx - x) ** 2 + (cy - y) ** 2;
+              if (dd < bd) { bd = dd; best = [cx, cy]; }
+            }
+            if (!best) return false;
+            ok.set(base.ok); g.clear.set(base.clear); g.dist.set(base.dist); top.set(base.top);
+            sack.position.x = best[0]; sack.position.y = best[1]; world.sugar.x = best[0]; world.sugar.y = best[1];
+            sack.updateMatrixWorld(true);
+            for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
+              const cx = x0 + (i + 0.5) * cell, cy = y0 + (j + 0.5) * cell;
+              if (Math.hypot(cx - world.sugar.x, cy - world.sugar.y) < world.sugar.r + 0.02) { ok[j * n + i] = 0; g.clear[j * n + i] = 0; g.dist[j * n + i] = 0; top[j * n + i] = Math.max(top[j * n + i], sackTop); }
+            }
+            return true;
+          };
+          placeSack(world.sugar.x, world.sugar.y);
         }
         let clearCells = 0; for (const v of world.ground.clear) clearCells += v;
         console.info(`walkable floor: ${walkableCells} cells, ${clearCells} clear for the body`);
@@ -2122,7 +2160,7 @@ function stepMs() { for (let i = 0; i < PHYS_SUBSTEPS; i++) stepSimulation(); }
 
     const SENSE_ROWS: [string, () => number][] = [
       ['sweet', () => brain.rate.grn_sweet], ['bitter', () => brain.rate.grn_bitter], ['odour', () => brain.rate.orn],
-      ['touch', () => brain.rate.mechano], ['heat', () => brain.rate.thermo_hot], ['cool', () => brain.rate.thermo_cold],
+      ['touch', () => brain.rate.mechano], ['wind', () => brain.rate.mechano_wind || 0], ['heat', () => brain.rate.thermo_hot], ['cool', () => brain.rate.thermo_cold],
       ['damp', () => brain.rate.hygro], ['light', () => brain.rate.visual], ['looming', () => (brain.rate.lc4 + brain.rate.lplc2) / 2],
       ['object', () => brain.rate.lc11]];
 
@@ -2228,20 +2266,24 @@ function stepMs() { for (let i = 0; i < PHYS_SUBSTEPS; i++) stepSimulation(); }
     // makes of it is the world's business: the ball looms by its real approach, bumps as a
     // touch, and is seen by the eyes.
     const tap = { x:0, y:0, t:0, id:-1 };
-    const grab = { active: false, id: -1, planeZ: 0, tx: 0, ty: 0, vx: 0, vy: 0, lastT: 0, lastX: 0, lastY: 0 };
+    const grab = { active: false, id: -1, planeZ: 0, tx: 0, ty: 0, vx: 0, vy: 0, lastT: 0, lastX: 0, lastY: 0, what: 'ball' as 'ball' | 'sack' };
     const grabPlane = new THREE.Plane(), grabPoint = new THREE.Vector3(), grabRay = new THREE.Raycaster();
     const GRAB = { maxSpeed: 4.0, gain: 12 };   // cm/s cap while held; how eagerly the ball follows the pointer (1/s)
     function pointerOnPlane(clientX: number, clientY: number) {
       grabRay.setFromCamera(new THREE.Vector2(clientX / innerWidth * 2 - 1, -(clientY / innerHeight) * 2 + 1), camera);
       return grabRay.ray.intersectPlane(grabPlane, grabPoint) ? grabPoint : null;
     }
-    function ballUnder(clientX: number, clientY: number) {
-      if (!ball) return false;
+    function underPointer(clientX: number, clientY: number): 'ball' | 'sack' | null {
       grabRay.setFromCamera(new THREE.Vector2(clientX / innerWidth * 2 - 1, -(clientY / innerHeight) * 2 + 1), camera);
-      return grabRay.intersectObject(ball.wrap, true).length > 0;
+      const sack = propObjs['sugar_sack.glb'];
+      const hits: [number, 'ball' | 'sack'][] = [];
+      if (ball) { const h = grabRay.intersectObject(ball.wrap, true)[0]; if (h) hits.push([h.distance, 'ball']); }
+      if (sack && placeSack) { const h = grabRay.intersectObject(sack, true)[0]; if (h) hits.push([h.distance, 'sack']); }
+      hits.sort((a, b) => a[0] - b[0]);
+      return hits.length ? hits[0][1] : null;
     }
     function stepGrab(dt: number) {
-      if (!grab.active || !ball || dt <= 0) return;
+      if (!grab.active || grab.what !== 'ball' || !ball || dt <= 0) return;
       const p = ball.body.position;
       let vx = (grab.tx - p.x) * GRAB.gain, vy = (grab.ty - p.y) * GRAB.gain;
       const sp = Math.hypot(vx, vy); if (sp > GRAB.maxSpeed) { vx *= GRAB.maxSpeed / sp; vy *= GRAB.maxSpeed / sp; }
@@ -2249,16 +2291,23 @@ function stepMs() { for (let i = 0; i < PHYS_SUBSTEPS; i++) stepSimulation(); }
     }
     renderer.domElement.addEventListener('pointerdown', e => {
       tap.x = e.clientX; tap.y = e.clientY; tap.t = performance.now(); tap.id = e.pointerId;
-      if (ball && ballUnder(e.clientX, e.clientY)) {
-        grab.active = true; grab.id = e.pointerId; grab.planeZ = ball.body.position.z;
+      const what = underPointer(e.clientX, e.clientY);
+      if (what === 'ball' && ball) {
+        grab.active = true; grab.what = 'ball'; grab.id = e.pointerId; grab.planeZ = ball.body.position.z;
         grabPlane.set(new THREE.Vector3(0, 0, 1), -grab.planeZ);
         grab.tx = ball.body.position.x; grab.ty = ball.body.position.y; grab.vx = grab.vy = 0; grab.lastT = performance.now(); grab.lastX = grab.tx; grab.lastY = grab.ty;
+        controls.enabled = false; renderer.domElement.setPointerCapture(e.pointerId); renderer.domElement.style.cursor = 'grabbing';
+      } else if (what === 'sack') {
+        // the sack slides along the floor to the pointer, snapping to floor its footprint fits
+        grab.active = true; grab.what = 'sack'; grab.id = e.pointerId; grab.planeZ = WORLD.floorZ + 0.1;
+        grabPlane.set(new THREE.Vector3(0, 0, 1), -grab.planeZ);
         controls.enabled = false; renderer.domElement.setPointerCapture(e.pointerId); renderer.domElement.style.cursor = 'grabbing';
       }
     });
     renderer.domElement.addEventListener('pointermove', e => {
       if (!grab.active || e.pointerId !== grab.id) return;
       const q = pointerOnPlane(e.clientX, e.clientY); if (!q) return;
+      if (grab.what === 'sack') { if (placeSack) placeSack(q.x, q.y); return; }
       const now = performance.now(), dt = Math.max(1e-3, (now - grab.lastT) / 1000);
       grab.vx = (q.x - grab.lastX) / dt; grab.vy = (q.y - grab.lastY) / dt;   // the hand's own speed, for the throw
       grab.tx = q.x; grab.ty = q.y; grab.lastX = q.x; grab.lastY = q.y; grab.lastT = now;
@@ -2266,7 +2315,7 @@ function stepMs() { for (let i = 0; i < PHYS_SUBSTEPS; i++) stepSimulation(); }
     const release = (e: PointerEvent) => {
       if (!grab.active || e.pointerId !== grab.id) return;
       grab.active = false; grab.id = -1; controls.enabled = true; renderer.domElement.style.cursor = '';
-      if (ball) {   // thrown: the hand's speed over the last move, if the hand was still moving
+      if (grab.what === 'ball' && ball) {   // thrown: the hand's speed over the last move, if the hand was still moving
         const stale = performance.now() - grab.lastT > 120;
         const sp = Math.hypot(grab.vx, grab.vy), cap = 2 * GRAB.maxSpeed;
         const k = stale ? 0 : sp > cap ? cap / sp : 1;
@@ -2350,11 +2399,16 @@ function stepMs() { for (let i = 0; i < PHYS_SUBSTEPS; i++) stepSimulation(); }
         const budget = quality.profile.budgetMs;
         const tStart = performance.now();
         let n = 0;
+        // With the brain on its thread, a millisecond can only be stepped once its record has
+        // arrived; the physics substeps inside a millisecond never wait.
+        const proxy = brain instanceof BrainProxy ? brain : null;
         while (acc > timestep && performance.now() - tStart < budget) {
+          if (proxy && proxy.available === 0 && (sim.steps + 1) % PHYS_SUBSTEPS === 0) break;
           stepSimulation();
           acc -= timestep; n++;
         }
         spsN += n; simDt = n * timestep;
+        if (proxy) proxy.pump();
 
         syncGeoms(model, data);
       }
@@ -2399,7 +2453,7 @@ function stepMs() { for (let i = 0; i < PHYS_SUBSTEPS; i++) stepSimulation(); }
         $('s_sugar_d').textContent = world.sugar.placed ? `${world.sugarDist.toFixed(2)} cm · ${Math.round(world.sugar.amount * 100)} % left` : '–';
         $('s_wtaste').textContent = `${wl.sweet.toFixed(2)} / ${wl.sweetLeg.toFixed(2)} / ${wl.bitter.toFixed(0)} / ${wl.odour.toFixed(2)}`;
         $('s_wlight').textContent = `${wl.light.toFixed(2)} / ${wl.heat.toFixed(2)} / ${wl.cool.toFixed(2)}`;
-        $('s_wloom').textContent = `${wl.looming.toFixed(2)} / ${wl.object.toFixed(2)} / ${wl.touch.toFixed(2)}`;
+        $('s_wloom').textContent = `${wl.looming.toFixed(2)} / ${wl.object.toFixed(2)} / ${wl.touch.toFixed(2)} / ${wl.wind.toFixed(2)}`;
         $('s_steerside').textContent = flight.asym.toFixed(2);
       }
       $('s_cnt').textContent  = brain.sugarFeedSpikes.toLocaleString();
@@ -2441,6 +2495,7 @@ function stepMs() { for (let i = 0; i < PHYS_SUBSTEPS; i++) stepSimulation(); }
       renderer.setPixelRatio(Math.min(devicePixelRatio || 1, quality.profile.pixelRatio));
       neuralMap?.draw();
     });
+    if (brain instanceof BrainProxy && neuralMap) brain.trackSpikes(neuralMap.ids);   // the neural view's sample gets its spike times back each batch
     const flyWindow = (window as Window & typeof globalThis & { fly?: unknown, __flyReady?: boolean, __flyError?: string });
     flyWindow.fly = { mujoco, model, data, brain, sim, scene, camera, renderer, controls, geomNodes, quality,
                    applyBrain: () => applyBrainToActuators(brain, data), driveMap, shuffle, shuffleLegs,
@@ -2450,7 +2505,7 @@ function stepMs() { for (let i = 0; i < PHYS_SUBSTEPS; i++) stepSimulation(); }
                    sync: () => syncGeoms(model, data),
                    stepBall, get ball() { return ball; }, get ballWorld() { return ballWorld; },
                    occlusion: occ, statusSentence, sound, vision, EYE, stepEyes, sampleRetina, facePixel, THREE,
-                   stepMs, PHYS_SUBSTEPS, bodyClear, canStep, topOver, erodeOk, obstacleDistance, grab, GRAB,
+                   stepMs, PHYS_SUBSTEPS, bodyClear, canStep, topOver, erodeOk, obstacleDistance, grab, GRAB, placeSack: (x: number, y: number) => placeSack ? placeSack(x, y) : false,
                    dbg: () => ({ paused: sim.paused, acc, steps: sim.steps, time: data.time,
                                  nodes: geomNodes.length,
                                  brainMs: brain.ms, sugar: brain.sugar,

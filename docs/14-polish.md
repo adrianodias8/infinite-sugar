@@ -166,8 +166,9 @@ is measured before it is trusted.
   **Measured** (node, build machine, per simulated second): the brain 1.1 s, physics 2.8 s at
   ten substeps per millisecond, the world, actuators and gait 0.06 s. **Done**: five
   substeps (0.2 ms), stable and identical in every suite, physics 1.4 s; a simulated second
-  from 4.7 to about 3.3 s of wall time. A speed control asks for 1×, 2× or 4×. The brain's
-  kernel is the remaining cost; a WebAssembly kernel or a worker thread would be the next step.
+  from 4.7 to about 3.3 s of wall time. A speed control asks for 1×, 2× or 4×. **Then done**
+  ([17-threads-and-kernels.md](17-threads-and-kernels.md)): the kernel in WebAssembly (1.5×,
+  bit-identical) and the brain on a worker thread, overlapping the physics.
 - Wing kinematics write six joints per physics step; fine. The stride writes twelve leg
   actuators per brain tick; fine.
 - Mobile: re-run `docs/10` viewports with a flight and a walk; the follow camera's per-frame

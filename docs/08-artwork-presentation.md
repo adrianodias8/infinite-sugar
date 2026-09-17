@@ -26,7 +26,10 @@ rolled at the fly from 0.6 cm raises the looming level to 0.87 and the escape dr
 and the fly takes off with the ball still 0.47 cm away (an earlier proxy as wide as the
 wingspan kept the ball too far out to alarm it, see [13-world.md](13-world.md)); a slow roll
 that reaches the fly reads as a touch of 1.0 on that flank. The ball moves in the fly's own
-time, so a throw looks slow when the machine runs below real time. The speed button asks for 1×, 2× or 4× simulated time per real second; the
+time, so a throw looks slow when the machine runs below real time. The sugar sack can be
+dragged too: it slides along the floor to the pointer and snaps to the nearest spot its
+footprint fits that is not under the fly, the floor map is re-stamped, and the odour plume and
+the fly's target move with it. The speed button asks for 1×, 2× or 4× simulated time per real second; the
 achieved factor is in Inspect.
 
 Sugar starts enabled after resting calibration. The counter accumulates feeding motor spikes

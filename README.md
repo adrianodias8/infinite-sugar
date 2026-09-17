@@ -24,12 +24,16 @@ npm ci
 Open [localhost:7377](http://localhost:7377). The first load takes a few seconds.
 The browser code is TypeScript, compiled to unbundled JavaScript in `dist/`.
 `npm run typecheck` checks the source; `npm test` builds and checks the simulation.
-The local server builds once at startup; restart it after editing source files.
+The local server builds once at startup; restart it after editing source files. The brain's
+kernel is also compiled to WebAssembly (`web/kernel/lif.c`; `tools/build_kernel.sh` needs
+clang with the wasm32 target) and runs on a worker thread; `?brain=sync` runs it in-thread,
+which the tests do (see [docs/17-threads-and-kernels.md](docs/17-threads-and-kernels.md)).
 
 ## Controls
 
 Name the fly to begin. Drag to orbit and scroll to zoom. Tap the fly to touch it; drag the
-beach ball to pick it up, roll it at the fly or throw it (it looms, bumps and is seen). The fly lives
+beach ball to pick it up, roll it at the fly or throw it (it looms, bumps and is seen); drag
+the sugar sack to set it down elsewhere (the smell moves with it). The fly lives
 on its own: it sees the terrarium through its own photoreceptors, smells the sugar sack, walks
 in bouts when its walking neurons ask, feeds when it reaches the sugar, takes off when
 something looms, turns away from threats and toward smells, and lands wherever it is calm (see
@@ -38,8 +42,8 @@ recenter, speed and sound controls sit below the fly. Speed asks for 1×, 2× or
 time per real second; Inspect shows what the machine achieves. World switches the terrarium's senses off; Sugar
 overrides with infinite sugar wherever the fly is; sound (off by default) is a wingbeat tone
 and a tick per step, synthesised from the same state that draws them. The environment strip
-forces the other senses: touch, heat, cool, odour, bitter and damp are switches, Light also
-brightens the terrarium, and Loom sends a dark sphere at the fly. A status line says what the
+forces the other senses: touch, heat, cool, odour, bitter, damp and wind are switches, Light
+also brightens the terrarium, and Loom sends a dark sphere at the fly. A status line says what the
 fly is doing in a sentence (walking toward the sugar, feeding at the sack, flying from a
 threat). The camera watches from where you put it and slides round the fly when the terrarium
 hides it. About contains the premise, technical summary, credits and further reading; Inspect

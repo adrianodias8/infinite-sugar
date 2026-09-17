@@ -1,5 +1,6 @@
-// Determinism: two independent brains and bodies, stepped through the same 12 s (world on, a
-// loom at 3 s), produce bit-identical trajectories, spike counts and world levels. Nothing in
+// Determinism: two independent brains and bodies, one on the JavaScript kernel and one on the
+// WebAssembly kernel, stepped through the same 12 s (world on, a loom at 3 s), produce
+// bit-identical trajectories, spike counts and world levels. Nothing in
 // the brain, the world or the locomotion mapping draws on Math.random; the one seeded term
 // (the altitude wander) repeats for the same seed and differs for another.
 // Usage: npm test (or build first, then node tools/determinism_test.mjs)
@@ -29,10 +30,12 @@ const start = app.indexOf('// --------------------------------------------------
 const end = app.indexOf('// ---------------------------------------------------------------- main', start);
 assert(start >= 0 && end > start, 'controller section must exist');
 
-function run(seed, seconds) {
+const kernelModule = await WebAssembly.compile(fs.readFileSync('web/kernel/lif.wasm'));
+function run(seed, seconds, kernel = 'js') {
   const data = new mujoco.MjData(model);
   const brain = new Brain(meta, blob('indptr', Uint32Array), blob('colidx', Uint32Array),
     Float32Array.from(blob('w2', Int16Array), x => x * 0.005 / 2));
+  if (kernel === 'wasm') brain.useKernel(kernelModule);
   brain.calibrate();
   const sim = { steps:0, brainStartMs:0 };
   const context = vm.createContext({ mujoco, model, data, brain, sim, performance });
@@ -51,8 +54,8 @@ globalThis.controller = { resetSim, buildDriveMap, buildShuffleMap, buildFlightM
   return { samples, flights: c.flight.count, walks: c.flight.walk.count, shuffles: c.shuffle.count, t: data.time, brainMs: brain.ms };
 }
 const seconds = 12;
-const a = run(7, seconds), b = run(7, seconds);
-console.log('run A', { flights: a.flights, walks: a.walks, shuffles: a.shuffles, t: a.t.toFixed(3), brainMs: a.brainMs, spikes: a.samples.at(-1).spikes });
+const a = run(7, seconds, 'js'), b = run(7, seconds, 'wasm');   // the JavaScript kernel against the WebAssembly one: the same arithmetic, so bit-identical
+console.log('run A (js) vs B (wasm)', { flights: a.flights, walks: a.walks, shuffles: a.shuffles, t: a.t.toFixed(3), brainMs: a.brainMs, spikes: a.samples.at(-1).spikes });
 assert.deepEqual({ flights: a.flights, walks: a.walks, shuffles: a.shuffles, t: a.t, brainMs: a.brainMs }, { flights: b.flights, walks: b.walks, shuffles: b.shuffles, t: b.t, brainMs: b.brainMs }, 'the same counts');
 for (let i = 0; i < a.samples.length; i++) {
   const sa = a.samples[i], sb = b.samples[i];
@@ -67,4 +70,4 @@ const c2 = run(11, seconds);
 const zA = a.samples.filter(s => s.state === 'flight').map(s => s.z), zC = c2.samples.filter(s => s.state === 'flight').map(s => s.z);
 console.log('altitude by seed', { seed7: zA.slice(0, 5).map(z => z.toFixed(4)), seed11: zC.slice(0, 5).map(z => z.toFixed(4)) });
 assert(zA.length && zC.length && zA.some((z, i) => zC[i] !== undefined && Math.abs(z - zC[i]) > 1e-6), 'a different seed wanders differently');
-console.log('PASS: bit-identical trajectory, spikes, states and world levels across two runs; the altitude seed is the only free term');
+console.log('PASS: bit-identical trajectory, spikes, states and world levels across two runs, one on the JavaScript kernel and one on the WebAssembly kernel; the altitude seed is the only free term');

@@ -1,13 +1,13 @@
 // Compact projection of measured neuron positions and sampled, actual graph edges.
 // A flash marks the source neuron's spike, not a measured propagation along an axon.
 
-import type { Brain } from './brain.js';
+import type { BrainAPI } from './brain.js';
 
 type MapData = { neuronCount: number, ids: number[], positions: number[], categories: number[], reference: number[], edges: number[][] };
 const COLORS = ['#76caff', '#ec8cbc', '#f5d878'];
 const FLASH_MS = 65;
 
-export async function createNeuralMap(canvas: HTMLCanvasElement, brain: Brain) {
+export async function createNeuralMap(canvas: HTMLCanvasElement, brain: BrainAPI) {
   const response = await fetch('./brain/neural-map.json');
   if (!response.ok) throw new Error(`neural map: HTTP ${response.status}`);
   const map = await response.json() as MapData;
@@ -129,5 +129,5 @@ export async function createNeuralMap(canvas: HTMLCanvasElement, brain: Brain) {
   }
   draw();
   function setQuality(ratio: number) { maxDensity = ratio; draw(); }
-  return { draw, setQuality };
+  return { draw, setQuality, ids: map.ids };
 }

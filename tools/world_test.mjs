@@ -180,13 +180,14 @@ w.enabled = true;
 
 // 5b. Plants taste bitter: a ground map with a plant cell under the labellum drives the bitter GRNs.
 {
-  const n = 8, cell = 0.1, x0 = data.qpos[0] - 0.4, y0 = data.qpos[1] - 0.4;
+  const n = 12, cell = 0.1, x0 = data.qpos[0] - 0.6, y0 = data.qpos[1] - 0.6;
   const ok = new Uint8Array(n * n).fill(1), plant = new Uint8Array(n * n);
-  const i = Math.floor((tip[0] - x0) / cell), j = Math.floor((tip[1] - y0) / cell);
+  const tipNow = [(data.xpos[lab * 3] + data.xpos[mujoco.mj_name2id(model, 1, 'labrum_right') * 3]) / 2, (data.xpos[lab * 3 + 1] + data.xpos[mujoco.mj_name2id(model, 1, 'labrum_right') * 3 + 1]) / 2];   // where the labellum is now (the fly may have walked)
+  const i = Math.floor((tipNow[0] - x0) / cell), j = Math.floor((tipNow[1] - y0) / cell);
   plant[j * n + i] = 1; ok[j * n + i] = 0;
   w.ground = { x0, y0, cell, n, ok, plant };
   c.stepWorld(data, 0.001);
-  assert(c.plantAt(tip[0], tip[1]) && lr('bitter')[0] === 1 && w.levels.bitter === 1, 'the labellum against a plant tastes bitter');
+  assert(c.plantAt(tipNow[0], tipNow[1]) && lr('bitter')[0] === 1 && w.levels.bitter === 1, 'the labellum against a plant tastes bitter');
   plant[j * n + i] = 0;
   c.stepWorld(data, 0.001);
   assert.equal(lr('bitter')[0], 0, 'no plant, no bitter');
@@ -224,12 +225,16 @@ assert(c.walkable(nx, ny), 'nearest walkable point is walkable');
 }
 
 // 7. Grooming: DNg11 above its rest while standing lifts and rubs the front legs; quiet, never.
-c.flight.enabled = false;
+c.flight.enabled = false; c.flight.state = 'ground'; c.flight.walk.bout = 0;   // standing (a bout may have been under way)
+// (the fly may have groomed on its own already: DNg11 crosses its gate at rest now and then; let any bout and its cooldown pass)
+const quietGroomer = { rate: { dn_groom: 0 }, rest: { dn_groom: 22 } };
+for (let i = 0; i < 3000 && (c.groom.active || c.groom.cooldown > 0); i++) c.stepGroom(quietGroomer, data, 0.001);
+const groomsBefore = c.groom.count;
 const femurT1 = mujoco.mj_name2id(model, 19, 'coxa_T1_left'), swingT1 = mujoco.mj_name2id(model, 19, 'coxa_twist_T1_left');   // coxa extension raises the leg
 const hold = [data.ctrl[femurT1], data.ctrl[swingT1]];
 const groomer = { rate: { dn_groom: 60 }, rest: { dn_groom: 22 } };
 for (let i = 0; i < 400; i++) c.stepGroom(groomer, data, 0.001);
-assert(c.groom.active && c.groom.count === 1, 'a raised DNg11 starts a grooming bout');
+assert(c.groom.active && c.groom.count === groomsBefore + 1, 'a raised DNg11 starts a grooming bout');
 let maxLift = 0, maxSwing = 0;
 for (let i = 0; i < 500; i++) { c.stepGroom(groomer, data, 0.001); maxLift = Math.max(maxLift, Math.abs(data.ctrl[femurT1] - hold[0])); maxSwing = Math.max(maxSwing, Math.abs(data.ctrl[swingT1] - hold[1])); }
 console.log('grooming', { lift: maxLift.toFixed(3), swing: maxSwing.toFixed(3) });

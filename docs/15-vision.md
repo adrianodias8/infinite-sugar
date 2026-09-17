@@ -91,6 +91,12 @@ and small-object (LC11) channels stay told geometrically by the world, as docume
 [13-world.md](13-world.md). The eyes give the photoreceptors and everything downstream of them
 a real image; they do not, by themselves, make the fly flinch.
 
+**The photoreceptors are histaminergic.** With the literature-verified transmitters applied
+(2026-09-16, [16-next-moves.md](16-next-moves.md)) the 8,456 R1-6 cells, predicted cholinergic
+or glutamatergic, are inhibitory, as in the fly (histamine-gated chloride channels on L1/L2):
+light now inhibits the lamina. The visual pool's rest is 4.6 Hz either way; the sign of what it
+does downstream is what changed.
+
 ## Honesty budget
 
 - The retinotopy is inferred from terminal positions by rank; the field limits (−15..155°,

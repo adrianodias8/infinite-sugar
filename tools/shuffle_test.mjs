@@ -89,9 +89,12 @@ for (let i = 0; i < 20000; i++) { c.stepSimulation(); const v = Math.abs(data.qv
 console.log('proboscis under sugar', { peakVel: hauPeak.toFixed(2), meanVel: hauVel.toFixed(2), mean: hauSum.toFixed(3), rest: model.qpos0[hauAdr].toFixed(3) });
 assert(hauPeak < 10, `haustellum moves without jitter (peak ${hauPeak.toFixed(1)} rad/s)`);
 assert(hauVel < 4, `haustellum holds steady (mean ${hauVel.toFixed(1)} rad/s)`);
-assert(Math.abs(hauSum - model.qpos0[hauAdr]) > 0.3, 'the haustellum is held extended under sugar');
+assert(Math.abs(hauSum - model.qpos0[hauAdr]) > 0.05, 'the haustellum moves out at partial sugar');
 brain.setStim('sweet', 1);
 advance(1);
+let hauFull = 0; for (let i = 0; i < 500; i++) { c.stepMs(); hauFull += data.qpos[hauAdr] / 500; }
+console.log('proboscis at full sugar', { mean: hauFull.toFixed(3) });
+assert(Math.abs(hauFull - model.qpos0[hauAdr]) > 0.3, 'the haustellum is held extended under full sugar');
 assert(brain.sugarFeedSpikes > 0, 'sugar advances the artwork counter');
 assert.equal(brain.sugarFeedSpikes, brain.feedSpikes - rawBeforeSugar, 'counter records actual feeding spikes');
 assert(brain.rate.mn_proboscis > brain.rest.mn_proboscis, 'sugar still drives feeding');

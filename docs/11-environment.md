@@ -11,7 +11,9 @@ sit in an environment strip under the main controls, and an Inspect table (Sense
 every sensory pool is doing, with the active ones highlighted.
 
 Measured in-browser with real DOM clicks, 2 s of simulation per switch, averaged over the last
-second. Nothing here was tuned — these are the responses the wiring already produced:
+second. Nothing here was tuned — these are the responses the wiring already produced
+(with the predicted synapse signs; the table with the literature-corrected signs, which
+replaced them on 2026-09-16, is in [16-next-moves.md](16-next-moves.md)):
 
 ```
                  pop  sensory  proboscis  antenna  neck L/R  gf  escwing L/R  steer L/R  groom
